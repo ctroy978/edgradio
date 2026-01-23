@@ -1,7 +1,17 @@
 [project]
 name = "edgradio"
 version = "0.1.0"
-description = "Add your description here"
+description = "Educational grading tool with Gradio UI and FastMCP backend"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "gradio>=5.0.0",
+    "mcp>=1.0.0",
+    "openai>=1.0.0",
+    "pydantic-settings>=2.0.0",
+    "tenacity>=8.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+edgradio = "main:main"
