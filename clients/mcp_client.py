@@ -188,6 +188,26 @@ class MCPClient:
             corrected_name=corrected_name,
         )
 
+    async def get_essay_preview(
+        self, job_id: str, essay_id: int, max_lines: int = 50
+    ) -> dict:
+        """Get the first N lines of an essay for identification.
+
+        Args:
+            job_id: The job ID
+            essay_id: The essay database ID
+            max_lines: Maximum lines to return (default: 50)
+
+        Returns:
+            Preview result with essay text and metadata
+        """
+        return await self.call_tool(
+            "get_essay_preview",
+            job_id=job_id,
+            essay_id=essay_id,
+            max_lines=max_lines,
+        )
+
     async def scrub_job(self, job_id: str) -> dict:
         """Scrub PII from all essays in a job.
 

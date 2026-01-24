@@ -139,12 +139,12 @@ class EssayGradingWorkflow(BaseWorkflow):
             # =========================================================
             with gr.Column(visible=False) as step3_panel:
                 gr.Markdown("## Step 3: Validate Student Names")
-                gr.Markdown("Review detected names and correct any OCR errors.")
+                gr.Markdown("Review detected names and correct any OCR errors. Use the essay preview to identify students.")
 
                 name_status = gr.Markdown()
 
                 names_table = gr.Dataframe(
-                    headers=["Essay ID", "Detected Name", "Status", "Roster Match"],
+                    headers=["Essay ID", "Detected Name", "Status"],
                     label="Student Names",
                     interactive=False,
                 )
@@ -155,6 +155,7 @@ class EssayGradingWorkflow(BaseWorkflow):
                             label="Essay ID to Correct",
                             precision=0,
                         )
+                        load_preview_btn = gr.Button("Load Essay Preview", variant="secondary")
                     with gr.Column(scale=2):
                         correction_name = gr.Textbox(
                             label="Corrected Name",
@@ -162,6 +163,15 @@ class EssayGradingWorkflow(BaseWorkflow):
                         )
                     with gr.Column(scale=1):
                         correct_btn = gr.Button("Apply Correction")
+
+                # Essay preview for identifying students - shows first 50 lines
+                essay_preview = gr.Textbox(
+                    label="Essay Preview (first 50 lines)",
+                    lines=10,
+                    max_lines=10,
+                    interactive=False,
+                    placeholder="Enter an Essay ID above and click 'Load Essay Preview' to see the essay content...",
+                )
 
                 with gr.Row():
                     validate_back_btn = gr.Button("← Back")
@@ -219,22 +229,26 @@ class EssayGradingWorkflow(BaseWorkflow):
 
                 reports_status = gr.Markdown(visible=False)
 
-                with gr.Row(visible=False) as download_row:
-                    gradebook_download = gr.File(label="Download Gradebook (CSV)")
-                    feedback_download = gr.File(label="Download Student Feedback (ZIP)")
-
             # =========================================================
             # STEP 7: Send Emails (Optional)
             # =========================================================
             with gr.Column(visible=False) as step7_panel:
-                gr.Markdown("## Step 7: Send Emails (Optional)")
-                gr.Markdown("Send individual feedback reports to students via email.")
+                gr.Markdown("## Step 7: Download Reports & Send Emails")
+                gr.Markdown("Download your reports, then optionally send feedback to students via email.")
 
+                # Download section - always visible in this step
+                gr.Markdown("### Download Reports")
+                with gr.Row():
+                    gradebook_download = gr.File(label="Download Gradebook (CSV)")
+                    feedback_download = gr.File(label="Download Student Feedback (ZIP)")
+
+                gr.Markdown("---")
+                gr.Markdown("### Send Emails (Optional)")
                 email_preflight = gr.Markdown()
 
                 with gr.Row():
                     email_back_btn = gr.Button("← Back")
-                    email_skip_btn = gr.Button("Skip (Finish)")
+                    email_skip_btn = gr.Button("Finish (Skip Email)")
                     email_btn = gr.Button("Send Emails", variant="primary")
 
                 email_status = gr.Markdown(visible=False)
@@ -289,7 +303,6 @@ class EssayGradingWorkflow(BaseWorkflow):
                             self._render_progress(state),
                             gr.update(visible=True, value="❌ Please provide a grading rubric"),
                             *update_panels(0).values(),
-                            gr.update(), gr.update(), gr.update(), gr.update(),
                         )
 
                     # Handle context files
@@ -319,7 +332,6 @@ class EssayGradingWorkflow(BaseWorkflow):
                         self._render_progress(state),
                         gr.update(visible=True, value=f"✅ Job created: `{job_id}`"),
                         *update_panels(1).values(),
-                        gr.update(), gr.update(), gr.update(), gr.update(),
                     )
 
                 except MCPClientError as e:
@@ -329,7 +341,6 @@ class EssayGradingWorkflow(BaseWorkflow):
                         self._render_progress(state),
                         gr.update(visible=True, value=f"❌ Error: {e}"),
                         *update_panels(0).values(),
-                        gr.update(), gr.update(), gr.update(), gr.update(),
                     )
 
             gather_btn.click(
@@ -409,21 +420,19 @@ class EssayGradingWorkflow(BaseWorkflow):
                     matched = result.get("matched_students", [])
                     mismatched = result.get("mismatched_students", [])
 
-                    # Build table data
+                    # Build table data (simplified - 3 columns)
                     rows = []
                     for m in matched:
                         rows.append([
                             m.get("essay_id", ""),
                             m.get("detected_name", ""),
-                            "✅ Matched",
-                            m.get("roster_name", ""),
+                            f"✅ Matched: {m.get('roster_name', '')}",
                         ])
                     for m in mismatched:
                         rows.append([
                             m.get("essay_id", ""),
                             m.get("detected_name", ""),
                             "❌ Needs Correction",
-                            m.get("reason", "Not in roster"),
                         ])
 
                     status = result.get("status", "")
@@ -436,6 +445,47 @@ class EssayGradingWorkflow(BaseWorkflow):
 
                 except MCPClientError as e:
                     return f"❌ Error: {e}", []
+
+            async def load_essay_preview(state_dict, essay_id):
+                """Load the first 50 lines of a specific essay for identification."""
+                if essay_id is None or essay_id < 0:
+                    return "Please enter a valid Essay ID"
+
+                state = WorkflowState.from_dict(state_dict)
+                try:
+                    # Use the dedicated essay preview tool
+                    result = await mcp_client.get_essay_preview(
+                        job_id=state.job_id,
+                        essay_id=int(essay_id),
+                        max_lines=50
+                    )
+
+                    if result.get("status") == "error":
+                        return result.get("message", "Error loading essay")
+
+                    # Build header and preview
+                    detected_name = result.get("detected_name", "Unknown")
+                    preview = result.get("preview", "No text available")
+                    total_lines = result.get("total_lines", 0)
+                    lines_shown = result.get("lines_shown", 0)
+
+                    header = (
+                        f"{'='*60}\n"
+                        f"ESSAY ID: {int(essay_id)} | Detected Name: {detected_name}\n"
+                        f"Showing {lines_shown} of {total_lines} lines\n"
+                        f"{'='*60}\n\n"
+                    )
+
+                    return header + preview
+
+                except MCPClientError as e:
+                    return f"Error loading essay: {e}"
+
+            load_preview_btn.click(
+                fn=load_essay_preview,
+                inputs=[state, correction_essay_id],
+                outputs=[essay_preview],
+            )
 
             # Now wire up upload button with chain to load names
             upload_btn.click(
@@ -638,7 +688,6 @@ class EssayGradingWorkflow(BaseWorkflow):
                         state.to_dict(),
                         self._render_progress(state),
                         gr.update(visible=True, value="✅ Reports generated!"),
-                        gr.update(visible=True),
                         gr.update(value=gradebook_path),
                         gr.update(value=feedback_path),
                         *update_panels(6).values(),
@@ -650,7 +699,6 @@ class EssayGradingWorkflow(BaseWorkflow):
                         state.to_dict(),
                         self._render_progress(state),
                         gr.update(visible=True, value=f"❌ Error: {e}"),
-                        gr.update(visible=False),
                         gr.update(), gr.update(),
                         *update_panels(5).values(),
                     )
@@ -680,7 +728,7 @@ class EssayGradingWorkflow(BaseWorkflow):
                 fn=handle_reports,
                 inputs=[state],
                 outputs=[
-                    state, progress_display, reports_status, download_row,
+                    state, progress_display, reports_status,
                     gradebook_download, feedback_download,
                     step1_panel, step2_panel, step3_panel, step4_panel,
                     step5_panel, step6_panel, step7_panel, complete_panel,
