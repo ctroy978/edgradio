@@ -47,222 +47,207 @@ class EssayGradingWorkflow(BaseWorkflow):
             gr.Markdown("# 📝 Essay Grading Workflow")
             gr.Markdown("Follow the steps below to grade your students' essays.")
 
-            # Progress display
+            # Main layout: sidebar + content
             with gr.Row():
-                progress_display = gr.Markdown(
-                    value=self._render_progress(self.create_initial_state())
-                )
+                # Left sidebar with progress (hide loading indicator here)
+                with gr.Column(scale=1, min_width=200):
+                    progress_display = gr.Markdown(
+                        value=self._render_progress(self.create_initial_state()),
+                        show_label=False,
+                    )
 
-            # Status message area
-            status_msg = gr.Markdown(visible=False)
+                # Main content area
+                with gr.Column(scale=4):
+                    # Status message area (at top of content)
+                    status_msg = gr.Markdown(visible=False)
 
-            # =========================================================
-            # STEP 1: Gather Materials
-            # =========================================================
-            with gr.Column(visible=True) as step1_panel:
-                gr.Markdown("## Step 1: Gather Materials")
-                gr.Markdown("Enter your grading rubric, essay question, and optional context materials.")
+                    # =========================================================
+                    # STEP 1: Gather Materials
+                    # =========================================================
+                    with gr.Column(visible=True) as step1_panel:
+                        gr.Markdown("## Step 1: Gather Materials")
+                        gr.Markdown("Upload your grading rubric, essay question, and optional context materials.")
+                        gr.Markdown("**Note:** Only PDF and TXT files are accepted for upload.")
 
-                with gr.Row():
-                    with gr.Column(scale=2):
-                        rubric_text = gr.Textbox(
-                            label="Grading Rubric",
-                            placeholder="Paste your rubric here, or upload a file below...",
-                            lines=12,
-                        )
-                    with gr.Column(scale=1):
                         rubric_file = gr.File(
-                            label="Or Upload Rubric (PDF/TXT)",
+                            label="Grading Rubric (Required)",
                             file_types=[".pdf", ".txt"],
                         )
 
-                question_text = gr.Textbox(
-                    label="Essay Question/Prompt (Optional)",
-                    placeholder="Enter the essay question or prompt students were given...",
-                    lines=4,
-                )
-
-                with gr.Row():
-                    context_files = gr.File(
-                        label="Context Materials (Optional)",
-                        file_types=[".pdf", ".txt"],
-                        file_count="multiple",
-                    )
-                    kb_topic = gr.Textbox(
-                        label="Knowledge Base Topic",
-                        placeholder="e.g., 'frost_poetry' or 'wr121_fall2024'",
-                        info="Used to organize context materials for retrieval",
-                    )
-
-                job_name = gr.Textbox(
-                    label="Job Name (Optional)",
-                    placeholder="e.g., 'WR121 Essay 2 - Fall 2024'",
-                )
-
-                gather_btn = gr.Button("Save Materials & Continue →", variant="primary")
-
-            # =========================================================
-            # STEP 2: Upload Essays
-            # =========================================================
-            with gr.Column(visible=False) as step2_panel:
-                gr.Markdown("## Step 2: Upload Essays")
-                gr.Markdown("Upload the student essays for processing.")
-
-                essay_format = gr.Radio(
-                    choices=["Handwritten (requires OCR)", "Typed (digital)"],
-                    label="Essay Format",
-                    value="Handwritten (requires OCR)",
-                )
-
-                with gr.Row():
-                    essay_dir = gr.Textbox(
-                        label="Directory Path",
-                        placeholder="/path/to/essays/directory",
-                        info="Path to a directory containing PDF files",
-                        scale=2,
-                    )
-                    essay_files = gr.File(
-                        label="Or Upload PDFs Directly",
-                        file_types=[".pdf"],
-                        file_count="multiple",
-                        scale=1,
-                    )
-
-                with gr.Row():
-                    upload_back_btn = gr.Button("← Back")
-                    upload_btn = gr.Button("Process Essays →", variant="primary")
-
-                upload_progress = gr.Markdown(visible=False)
-
-            # =========================================================
-            # STEP 3: Validate Names
-            # =========================================================
-            with gr.Column(visible=False) as step3_panel:
-                gr.Markdown("## Step 3: Validate Student Names")
-                gr.Markdown("Review detected names and correct any OCR errors. Use the essay preview to identify students.")
-
-                name_status = gr.Markdown()
-
-                names_table = gr.Dataframe(
-                    headers=["Essay ID", "Detected Name", "Status"],
-                    label="Student Names",
-                    interactive=False,
-                )
-
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        correction_essay_id = gr.Number(
-                            label="Essay ID to Correct",
-                            precision=0,
+                        question_text = gr.Textbox(
+                            label="Essay Question/Prompt (Optional)",
+                            placeholder="Enter the essay question or prompt students were given...",
+                            lines=4,
                         )
-                        load_preview_btn = gr.Button("Load Essay Preview", variant="secondary")
-                    with gr.Column(scale=2):
-                        correction_name = gr.Textbox(
-                            label="Corrected Name",
-                            placeholder="Enter the correct student name",
+
+                        with gr.Row():
+                            context_files = gr.File(
+                                label="Context Materials (Optional)",
+                                file_types=[".pdf", ".txt"],
+                                file_count="multiple",
+                            )
+                            kb_topic = gr.Textbox(
+                                label="Knowledge Base Topic",
+                                placeholder="e.g., 'frost_poetry' or 'wr121_fall2024'",
+                                info="Used to organize context materials for retrieval",
+                            )
+
+                        job_name = gr.Textbox(
+                            label="Job Name (Optional)",
+                            placeholder="e.g., 'WR121 Essay 2 - Fall 2024'",
                         )
-                    with gr.Column(scale=1):
-                        correct_btn = gr.Button("Apply Correction")
 
-                # Essay preview for identifying students - shows first 50 lines
-                essay_preview = gr.Textbox(
-                    label="Essay Preview (first 50 lines)",
-                    lines=10,
-                    max_lines=10,
-                    interactive=False,
-                    placeholder="Enter an Essay ID above and click 'Load Essay Preview' to see the essay content...",
-                )
+                        gather_btn = gr.Button("Save Materials & Continue →", variant="primary")
 
-                with gr.Row():
-                    validate_back_btn = gr.Button("← Back")
-                    validate_refresh_btn = gr.Button("Refresh Names")
-                    validate_btn = gr.Button("Continue to Scrubbing →", variant="primary")
+                    # =========================================================
+                    # STEP 2: Upload Essays
+                    # =========================================================
+                    with gr.Column(visible=False) as step2_panel:
+                        gr.Markdown("## Step 2: Upload Essays")
+                        gr.Markdown("Upload the student essays for processing.")
 
-            # =========================================================
-            # STEP 4: Scrub PII
-            # =========================================================
-            with gr.Column(visible=False) as step4_panel:
-                gr.Markdown("## Step 4: Scrub PII (FERPA Compliance)")
-                gr.Markdown("Remove student names from essays before AI evaluation.")
+                        essay_format = gr.Radio(
+                            choices=["Handwritten (requires OCR)", "Typed (digital)"],
+                            label="Essay Format (Required)",
+                        )
 
-                scrub_info = gr.Markdown(
-                    """
-                    **What happens in this step:**
-                    - Student names are removed from essay text
-                    - Names are replaced with `[STUDENT_NAME]` placeholder
-                    - This ensures blind grading and FERPA compliance
-                    - Original names are preserved in the database for reports
-                    """
-                )
+                        essay_files = gr.File(
+                            label="Upload Essay PDFs",
+                            file_types=[".pdf"],
+                            file_count="multiple",
+                        )
 
-                with gr.Row():
-                    scrub_back_btn = gr.Button("← Back")
-                    scrub_btn = gr.Button("Scrub PII & Continue →", variant="primary")
+                        with gr.Row():
+                            upload_back_btn = gr.Button("← Back")
+                            upload_btn = gr.Button("Process Essays →", variant="primary")
 
-                scrub_status = gr.Markdown(visible=False)
+                    # =========================================================
+                    # STEP 3: Validate Names
+                    # =========================================================
+                    with gr.Column(visible=False) as step3_panel:
+                        gr.Markdown("## Step 3: Validate Student Names")
+                        gr.Markdown("Review detected names and correct any OCR errors. Use the essay preview to identify students.")
 
-            # =========================================================
-            # STEP 5: Evaluate Essays
-            # =========================================================
-            with gr.Column(visible=False) as step5_panel:
-                gr.Markdown("## Step 5: Evaluate Essays")
-                gr.Markdown("AI will grade each essay according to your rubric.")
+                        name_status = gr.Markdown()
 
-                eval_info = gr.Markdown()
+                        names_table = gr.Dataframe(
+                            headers=["Essay ID", "Detected Name", "Status"],
+                            label="Student Names",
+                            interactive=False,
+                        )
 
-                with gr.Row():
-                    eval_back_btn = gr.Button("← Back")
-                    eval_btn = gr.Button("Start Evaluation →", variant="primary")
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                correction_essay_id = gr.Number(
+                                    label="Essay ID to Correct",
+                                    precision=0,
+                                )
+                                load_preview_btn = gr.Button("Load Essay Preview", variant="secondary")
+                            with gr.Column(scale=2):
+                                correction_name = gr.Textbox(
+                                    label="Corrected Name",
+                                    placeholder="Enter the correct student name",
+                                )
+                            with gr.Column(scale=1):
+                                correct_btn = gr.Button("Apply Correction")
 
-                eval_progress = gr.Markdown(visible=False)
+                        # Essay preview for identifying students - shows first 50 lines
+                        essay_preview = gr.Textbox(
+                            label="Essay Preview (first 50 lines)",
+                            lines=10,
+                            max_lines=10,
+                            interactive=False,
+                            placeholder="Enter an Essay ID above and click 'Load Essay Preview' to see the essay content...",
+                        )
 
-            # =========================================================
-            # STEP 6: Generate Reports
-            # =========================================================
-            with gr.Column(visible=False) as step6_panel:
-                gr.Markdown("## Step 6: Generate Reports")
-                gr.Markdown("Create gradebook and individual student feedback reports.")
+                        with gr.Row():
+                            validate_back_btn = gr.Button("← Back")
+                            validate_refresh_btn = gr.Button("Refresh Names")
+                            validate_btn = gr.Button("Continue to Scrubbing →", variant="primary")
 
-                with gr.Row():
-                    reports_back_btn = gr.Button("← Back")
-                    reports_btn = gr.Button("Generate Reports →", variant="primary")
+                    # =========================================================
+                    # STEP 4: Scrub PII
+                    # =========================================================
+                    with gr.Column(visible=False) as step4_panel:
+                        gr.Markdown("## Step 4: Scrub PII (FERPA Compliance)")
+                        gr.Markdown("Remove student names from essays before AI evaluation.")
 
-                reports_status = gr.Markdown(visible=False)
+                        scrub_info = gr.Markdown(
+                            """
+                            **What happens in this step:**
+                            - Student names are removed from essay text
+                            - Names are replaced with `[STUDENT_NAME]` placeholder
+                            - This ensures blind grading and FERPA compliance
+                            - Original names are preserved in the database for reports
+                            """
+                        )
 
-            # =========================================================
-            # STEP 7: Send Emails (Optional)
-            # =========================================================
-            with gr.Column(visible=False) as step7_panel:
-                gr.Markdown("## Step 7: Download Reports & Send Emails")
-                gr.Markdown("Download your reports, then optionally send feedback to students via email.")
+                        with gr.Row():
+                            scrub_back_btn = gr.Button("← Back")
+                            scrub_btn = gr.Button("Scrub PII & Continue →", variant="primary")
 
-                # Download section - always visible in this step
-                gr.Markdown("### Download Reports")
-                with gr.Row():
-                    gradebook_download = gr.File(label="Download Gradebook (CSV)")
-                    feedback_download = gr.File(label="Download Student Feedback (ZIP)")
+                    # =========================================================
+                    # STEP 5: Evaluate Essays
+                    # =========================================================
+                    with gr.Column(visible=False) as step5_panel:
+                        gr.Markdown("## Step 5: Evaluate Essays")
+                        gr.Markdown("AI will grade each essay according to your rubric.")
 
-                gr.Markdown("---")
-                gr.Markdown("### Send Emails (Optional)")
-                email_preflight = gr.Markdown()
+                        eval_info = gr.Markdown()
 
-                with gr.Row():
-                    email_back_btn = gr.Button("← Back")
-                    email_skip_btn = gr.Button("Finish (Skip Email)")
-                    email_btn = gr.Button("Send Emails", variant="primary")
+                        with gr.Row():
+                            eval_back_btn = gr.Button("← Back")
+                            eval_btn = gr.Button("Start Evaluation →", variant="primary")
 
-                email_status = gr.Markdown(visible=False)
+                    # =========================================================
+                    # STEP 6: Generate Reports
+                    # =========================================================
+                    with gr.Column(visible=False) as step6_panel:
+                        gr.Markdown("## Step 6: Generate Reports")
+                        gr.Markdown("Create gradebook and individual student feedback reports.")
 
-            # =========================================================
-            # COMPLETION PANEL
-            # =========================================================
-            with gr.Column(visible=False) as complete_panel:
-                gr.Markdown("## ✅ Workflow Complete!")
-                gr.Markdown("All steps have been completed successfully.")
+                        with gr.Row():
+                            reports_back_btn = gr.Button("← Back")
+                            reports_btn = gr.Button("Generate Reports →", variant="primary")
 
-                completion_summary = gr.Markdown()
+                    # =========================================================
+                    # STEP 7: Send Emails (Optional)
+                    # =========================================================
+                    with gr.Column(visible=False) as step7_panel:
+                        gr.Markdown("## Step 7: Download Reports & Send Emails")
+                        gr.Markdown("Download your reports, then optionally send feedback to students via email.")
 
-                restart_btn = gr.Button("Start New Grading Session", variant="primary")
+                        # Download section - always visible in this step
+                        gr.Markdown("### Download Reports")
+                        with gr.Row():
+                            gradebook_download = gr.File(label="Download Gradebook (CSV)")
+                            feedback_download = gr.File(label="Download Student Feedback (ZIP)")
+
+                        gr.Markdown("---")
+                        gr.Markdown("### Send Emails (Optional)")
+                        email_preflight = gr.Markdown()
+
+                        with gr.Row():
+                            email_back_btn = gr.Button("← Back")
+                            email_skip_btn = gr.Button("Finish (Skip Email)")
+                            email_btn = gr.Button("Send Emails", variant="primary")
+
+                    # =========================================================
+                    # COMPLETION PANEL
+                    # =========================================================
+                    with gr.Column(visible=False) as complete_panel:
+                        gr.Markdown("## Workflow Complete!")
+                        gr.Markdown("All steps have been completed successfully.")
+
+                        completion_summary = gr.Markdown()
+
+                        restart_btn = gr.Button("Start New Grading Session", variant="primary")
+
+                    # Loading indicator at bottom of content area
+                    loading_indicator = gr.Markdown(
+                        value="**Processing...** Please wait.",
+                        visible=False,
+                    )
 
             # =========================================================
             # EVENT HANDLERS
@@ -283,25 +268,39 @@ class EssayGradingWorkflow(BaseWorkflow):
 
             # Step 1: Gather Materials
             async def handle_gather(
-                state_dict, rubric, rubric_file, question, context_files, kb_topic, job_name
+                state_dict, rubric_file, question, context_files, kb_topic, job_name
             ):
                 state = WorkflowState.from_dict(state_dict)
                 state.mark_step_in_progress(0)
 
                 try:
-                    # Handle rubric file upload
-                    final_rubric = rubric
-                    if rubric_file and not rubric.strip():
-                        # Read rubric from file
-                        result = await mcp_client.convert_pdf_to_text(rubric_file.name)
-                        final_rubric = result.get("text_content", "")
-
-                    if not final_rubric.strip():
-                        state.mark_step_error("Please provide a grading rubric")
+                    # Require rubric file upload
+                    if not rubric_file:
+                        state.mark_step_error("Please upload a grading rubric")
                         return (
                             state.to_dict(),
                             self._render_progress(state),
-                            gr.update(visible=True, value="❌ Please provide a grading rubric"),
+                            gr.update(visible=True, value="❌ Please upload a grading rubric (PDF or TXT)"),
+                            *update_panels(0).values(),
+                        )
+
+                    # Read rubric from file
+                    rubric_path = rubric_file.name
+                    if rubric_path.lower().endswith('.txt'):
+                        # Read text files directly
+                        with open(rubric_path, 'r', encoding='utf-8') as f:
+                            final_rubric = f.read()
+                    else:
+                        # Use PDF conversion for PDF files
+                        result = await mcp_client.convert_pdf_to_text(rubric_path)
+                        final_rubric = result.get("text_content", "")
+
+                    if not final_rubric.strip():
+                        state.mark_step_error("Could not read rubric file")
+                        return (
+                            state.to_dict(),
+                            self._render_progress(state),
+                            gr.update(visible=True, value="❌ Could not read rubric file. Please upload a valid PDF or TXT file."),
                             *update_panels(0).values(),
                         )
 
@@ -343,43 +342,73 @@ class EssayGradingWorkflow(BaseWorkflow):
                         *update_panels(0).values(),
                     )
 
+            # Helper to show loading indicator and disable button
+            def show_loading_disable():
+                return (
+                    gr.update(visible=True, value="**Processing...** Please wait."),
+                    gr.update(interactive=False),
+                )
+
+            # Helper to hide loading indicator and re-enable button
+            def hide_loading_enable():
+                return (
+                    gr.update(visible=False),
+                    gr.update(interactive=True),
+                )
+
             gather_btn.click(
+                fn=show_loading_disable,
+                inputs=[],
+                outputs=[loading_indicator, gather_btn],
+            ).then(
                 fn=handle_gather,
-                inputs=[state, rubric_text, rubric_file, question_text, context_files, kb_topic, job_name],
+                inputs=[state, rubric_file, question_text, context_files, kb_topic, job_name],
                 outputs=[
                     state, progress_display, status_msg,
                     step1_panel, step2_panel, step3_panel, step4_panel,
                     step5_panel, step6_panel, step7_panel, complete_panel,
                 ],
+                show_progress="hidden",
+            ).then(
+                fn=hide_loading_enable,
+                inputs=[],
+                outputs=[loading_indicator, gather_btn],
             )
 
             # Step 2: Upload Essays
-            async def handle_upload(state_dict, essay_dir, essay_files, essay_format):
+            async def handle_upload(state_dict, essay_files, essay_format):
                 state = WorkflowState.from_dict(state_dict)
                 state.mark_step_in_progress(1)
 
                 try:
-                    # Determine directory to process
-                    if essay_files:
-                        # Create temp directory with uploaded files
-                        temp_dir = tempfile.mkdtemp(prefix="essays_")
-                        for f in essay_files:
-                            dest = Path(temp_dir) / Path(f.name).name
-                            with open(dest, "wb") as out:
-                                with open(f.name, "rb") as inp:
-                                    out.write(inp.read())
-                        directory = temp_dir
-                    elif essay_dir:
-                        directory = essay_dir
-                    else:
-                        state.mark_step_error("Please provide essays")
+                    # Require essay format selection
+                    if not essay_format:
+                        state.mark_step_error("Please select an essay format")
                         return (
                             state.to_dict(),
                             self._render_progress(state),
-                            gr.update(visible=True, value="❌ Please provide essays"),
-                            gr.update(visible=False),
+                            gr.update(visible=True, value="❌ Please select an essay format (Handwritten or Typed)"),
                             *update_panels(1).values(),
                         )
+
+                    # Require essay files
+                    if not essay_files:
+                        state.mark_step_error("Please upload essay files")
+                        return (
+                            state.to_dict(),
+                            self._render_progress(state),
+                            gr.update(visible=True, value="❌ Please upload at least one essay PDF"),
+                            *update_panels(1).values(),
+                        )
+
+                    # Create temp directory with uploaded files
+                    temp_dir = tempfile.mkdtemp(prefix="essays_")
+                    for f in essay_files:
+                        dest = Path(temp_dir) / Path(f.name).name
+                        with open(dest, "wb") as out:
+                            with open(f.name, "rb") as inp:
+                                out.write(inp.read())
+                    directory = temp_dir
 
                     # Process essays
                     result = await mcp_client.process_essays(
@@ -397,7 +426,6 @@ class EssayGradingWorkflow(BaseWorkflow):
                         state.to_dict(),
                         self._render_progress(state),
                         gr.update(visible=True, value=f"✅ Processed {students} essays"),
-                        gr.update(visible=False),
                         *update_panels(2).values(),
                     )
 
@@ -407,7 +435,6 @@ class EssayGradingWorkflow(BaseWorkflow):
                         state.to_dict(),
                         self._render_progress(state),
                         gr.update(visible=True, value=f"❌ Error: {e}"),
-                        gr.update(visible=False),
                         *update_panels(1).values(),
                     )
 
@@ -489,17 +516,27 @@ class EssayGradingWorkflow(BaseWorkflow):
 
             # Now wire up upload button with chain to load names
             upload_btn.click(
+                fn=show_loading_disable,
+                inputs=[],
+                outputs=[loading_indicator, upload_btn],
+            ).then(
                 fn=handle_upload,
-                inputs=[state, essay_dir, essay_files, essay_format],
+                inputs=[state, essay_files, essay_format],
                 outputs=[
-                    state, progress_display, status_msg, upload_progress,
+                    state, progress_display, status_msg,
                     step1_panel, step2_panel, step3_panel, step4_panel,
                     step5_panel, step6_panel, step7_panel, complete_panel,
                 ],
+                show_progress="hidden",
             ).then(
                 fn=load_names,
                 inputs=[state],
                 outputs=[name_status, names_table],
+                show_progress="hidden",
+            ).then(
+                fn=hide_loading_enable,
+                inputs=[],
+                outputs=[loading_indicator, upload_btn],
             )
 
             async def handle_correction(state_dict, essay_id, corrected_name):
@@ -576,13 +613,22 @@ class EssayGradingWorkflow(BaseWorkflow):
                     )
 
             scrub_btn.click(
+                fn=show_loading_disable,
+                inputs=[],
+                outputs=[loading_indicator, scrub_btn],
+            ).then(
                 fn=handle_scrub,
                 inputs=[state],
                 outputs=[
-                    state, progress_display, scrub_status,
+                    state, progress_display, status_msg,
                     step1_panel, step2_panel, step3_panel, step4_panel,
                     step5_panel, step6_panel, step7_panel, complete_panel,
                 ],
+                show_progress="hidden",
+            ).then(
+                fn=hide_loading_enable,
+                inputs=[],
+                outputs=[loading_indicator, scrub_btn],
             )
 
             # Step 5: Evaluate Essays
@@ -651,13 +697,22 @@ class EssayGradingWorkflow(BaseWorkflow):
                     )
 
             eval_btn.click(
+                fn=show_loading_disable,
+                inputs=[],
+                outputs=[loading_indicator, eval_btn],
+            ).then(
                 fn=handle_evaluate,
                 inputs=[state],
                 outputs=[
-                    state, progress_display, eval_progress,
+                    state, progress_display, status_msg,
                     step1_panel, step2_panel, step3_panel, step4_panel,
                     step5_panel, step6_panel, step7_panel, complete_panel,
                 ],
+                show_progress="hidden",
+            ).then(
+                fn=hide_loading_enable,
+                inputs=[],
+                outputs=[loading_indicator, eval_btn],
             )
 
             # Step 6: Generate Reports
@@ -725,10 +780,14 @@ class EssayGradingWorkflow(BaseWorkflow):
 
             # Now wire up reports button with chain to load email preflight
             reports_btn.click(
+                fn=show_loading_disable,
+                inputs=[],
+                outputs=[loading_indicator, reports_btn],
+            ).then(
                 fn=handle_reports,
                 inputs=[state],
                 outputs=[
-                    state, progress_display, reports_status,
+                    state, progress_display, status_msg,
                     gradebook_download, feedback_download,
                     step1_panel, step2_panel, step3_panel, step4_panel,
                     step5_panel, step6_panel, step7_panel, complete_panel,
@@ -737,6 +796,10 @@ class EssayGradingWorkflow(BaseWorkflow):
                 fn=handle_email_preflight,
                 inputs=[state],
                 outputs=[email_preflight],
+            ).then(
+                fn=hide_loading_enable,
+                inputs=[],
+                outputs=[loading_indicator, reports_btn],
             )
 
             async def handle_send_emails(state_dict):
@@ -783,14 +846,22 @@ class EssayGradingWorkflow(BaseWorkflow):
                 )
 
             email_btn.click(
+                fn=show_loading_disable,
+                inputs=[],
+                outputs=[loading_indicator, email_btn],
+            ).then(
                 fn=handle_send_emails,
                 inputs=[state],
                 outputs=[
-                    state, progress_display, email_status,
+                    state, progress_display, status_msg,
                     step1_panel, step2_panel, step3_panel, step4_panel,
                     step5_panel, step6_panel, step7_panel, complete_panel,
                     completion_summary,
                 ],
+            ).then(
+                fn=hide_loading_enable,
+                inputs=[],
+                outputs=[loading_indicator, email_btn],
             )
 
             email_skip_btn.click(
@@ -904,4 +975,4 @@ class EssayGradingWorkflow(BaseWorkflow):
         for i, step in enumerate(state.steps):
             current = "→ " if i == state.current_step else "  "
             lines.append(f"{current}{step.display_label()}")
-        return "\n".join(lines)
+        return "\n\n".join(lines)
