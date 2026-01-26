@@ -10,88 +10,96 @@ from workflows.registry import WorkflowRegistry
 
 
 def create_app() -> gr.Blocks:
-    """Create the main Gradio application."""
+    """Create the main Gradio application with workflow routing."""
 
     with gr.Blocks(title="EdGradio - Educational Grading Tool") as app:
-        gr.Markdown(
-            """
-            # EdGradio
-            ### Educational Grading Tool
+        # State to track current view: "home" or workflow name
+        current_view = gr.State("home")
 
-            Select a workflow to get started.
-            """
-        )
+        # Home page container
+        with gr.Column(visible=True) as home_container:
+            gr.Markdown(
+                """
+                # EdGradio
+                ### Educational Grading Tool
 
-        # Get available workflows
-        workflow_choices = WorkflowRegistry.get_choices()
-
-        if not workflow_choices:
-            gr.Markdown("⚠️ No workflows available. Please check your installation.")
-            return app
-
-        # Workflow selector
-        with gr.Row():
-            workflow_dropdown = gr.Dropdown(
-                choices=workflow_choices,
-                value=workflow_choices[0][1] if workflow_choices else None,
-                label="Select Workflow",
-                scale=2,
+                Select a workflow below to get started.
+                """
             )
-            start_btn = gr.Button("Start Workflow →", variant="primary", scale=1)
 
-        # Placeholder for workflow description
-        workflow_desc = gr.Markdown(
-            value=_get_workflow_description(workflow_choices[0][1])
-            if workflow_choices
-            else ""
+            # Get available workflows
+            workflows = WorkflowRegistry.list_all()
+
+            if not workflows:
+                gr.Markdown("⚠️ No workflows available. Please check your installation.")
+            else:
+                # Display workflow cards
+                gr.Markdown("---")
+                gr.Markdown("## Available Workflows")
+
+                for name, description, icon in workflows:
+                    workflow = WorkflowRegistry.get(name)
+                    steps = workflow.get_steps()
+
+                    with gr.Group():
+                        with gr.Row():
+                            with gr.Column(scale=4):
+                                gr.Markdown(f"### {icon} {name.replace('_', ' ').title()}")
+                                gr.Markdown(description)
+                                step_summary = ", ".join([f"{s.icon} {s.label}" for s in steps[:4]])
+                                if len(steps) > 4:
+                                    step_summary += f" (+{len(steps) - 4} more)"
+                                gr.Markdown(f"**Steps:** {step_summary}")
+                            with gr.Column(scale=1, min_width=150):
+                                start_btn = gr.Button(
+                                    f"Start →",
+                                    variant="primary",
+                                    elem_id=f"start_{name}",
+                                )
+                                # Connect button to launch workflow
+                                start_btn.click(
+                                    fn=lambda n=name: n,
+                                    outputs=[current_view],
+                                )
+
+        # Workflow containers - one for each registered workflow
+        workflow_containers = {}
+        back_buttons = {}
+
+        for name, _, _ in workflows:
+            with gr.Column(visible=False) as container:
+                # Back button at top
+                with gr.Row():
+                    back_btn = gr.Button("← Back to Home", size="sm")
+                    gr.Markdown("")  # Spacer
+
+                # Build the workflow UI inline
+                workflow = WorkflowRegistry.get(name)
+                workflow.build_ui_content()
+
+                workflow_containers[name] = container
+                back_buttons[name] = back_btn
+
+                # Connect back button
+                back_btn.click(
+                    fn=lambda: "home",
+                    outputs=[current_view],
+                )
+
+        # Update visibility based on current_view state
+        def update_visibility(view):
+            updates = [gr.update(visible=(view == "home"))]
+            for name in workflow_containers:
+                updates.append(gr.update(visible=(view == name)))
+            return updates
+
+        current_view.change(
+            fn=update_visibility,
+            inputs=[current_view],
+            outputs=[home_container] + list(workflow_containers.values()),
         )
 
-        # Container for the selected workflow
-        workflow_container = gr.Column(visible=False)
-
-        # Update description on selection change
-        def update_description(workflow_name):
-            return _get_workflow_description(workflow_name)
-
-        workflow_dropdown.change(
-            fn=update_description,
-            inputs=[workflow_dropdown],
-            outputs=[workflow_desc],
-        )
-
-        # Launch workflow
-        def launch_workflow(workflow_name):
-            try:
-                workflow = WorkflowRegistry.get(workflow_name)
-                # Return the workflow UI
-                return gr.update(visible=True), workflow.build_ui()
-            except KeyError:
-                return gr.update(visible=False), gr.Markdown("Workflow not found")
-
-        # Note: For now, we directly embed the essay grading workflow
-        # In a full implementation, we'd dynamically load workflows
-
-    # For simplicity, just return the essay grading workflow directly
-    workflow = EssayGradingWorkflow()
-    return workflow.build_ui()
-
-
-def _get_workflow_description(workflow_name: str) -> str:
-    """Get description for a workflow."""
-    try:
-        workflow = WorkflowRegistry.get(workflow_name)
-        steps = workflow.get_steps()
-        step_list = "\n".join([f"- {s.display_label()}" for s in steps])
-        return f"""
-**{workflow.display_name()}**
-
-{workflow.description}
-
-**Steps:**
-{step_list}
-"""
-    except KeyError:
-        return "Workflow not found"
+    return app
 
 
 def main():

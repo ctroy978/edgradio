@@ -206,10 +206,19 @@ class BaseWorkflow(ABC):
 
     @abstractmethod
     def build_ui(self) -> gr.Blocks:
-        """Build the Gradio UI for this workflow.
+        """Build the Gradio UI for this workflow as a standalone app.
 
         Returns:
             Gradio Blocks component
+        """
+        pass
+
+    @abstractmethod
+    def build_ui_content(self) -> None:
+        """Build the Gradio UI content for embedding in a parent container.
+
+        This method should build all UI components without wrapping them
+        in gr.Blocks, allowing the workflow to be embedded in a larger app.
         """
         pass
 
