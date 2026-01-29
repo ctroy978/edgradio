@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # MCP Server settings
     mcp_server_path: str = str(Path.home() / "Work" / "edmcp" / "server.py")
 
+    # Bubble MCP Server settings
+    bubble_mcp_server_path: str = str(
+        Path.home() / "Work" / "edmcp" / "edmcp-bubble" / "server.py"
+    )
+
     # Optional: Brevo email settings (usually handled by MCP server)
     brevo_api_key: str | None = None
 
