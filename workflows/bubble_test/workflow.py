@@ -36,7 +36,7 @@ class BubbleTestWorkflow(BaseWorkflow):
         return app
 
     def build_ui_content(self) -> None:
-        """Build the tabbed UI with dashboard for embedding."""
+        """Build the tabbed UI with test browser for embedding."""
         client = BubbleMCPClient()
         state = gr.State(BubbleTestState().to_dict())
 
@@ -46,24 +46,30 @@ class BubbleTestWorkflow(BaseWorkflow):
         status_msg = gr.Markdown("", elem_id="status_msg")
 
         with gr.Row():
-            # === LEFT COLUMN: Dashboard ===
-            with gr.Column(scale=1, min_width=280):
-                dashboard_components = self._build_dashboard(client, state, status_msg)
+            # === LEFT COLUMN: Create New Test (compact) ===
+            with gr.Column(scale=1, min_width=250):
+                create_components = self._build_create_panel(client, state, status_msg)
+                # Selected test info panel
+                gr.Markdown("---")
+                gr.Markdown("### Selected Test")
+                test_info = gr.Markdown("*No test selected*")
 
-            # === RIGHT COLUMN: Tabbed Actions ===
+            # === RIGHT COLUMN: Test Browser + Workflow Tabs ===
             with gr.Column(scale=3):
                 with gr.Tabs() as tabs:
-                    with gr.TabItem("📝 Create Test", id=0):
-                        create_components = self._build_create_tab(client, state, status_msg)
+                    with gr.TabItem("📋 Browse Tests", id=0):
+                        dashboard_components = self._build_test_browser(
+                            client, state, status_msg, test_info
+                        )
 
                     with gr.TabItem("📄 Generate Sheet", id=1):
                         sheet_components = self._build_sheet_tab(
-                            client, state, status_msg, dashboard_components["test_info"]
+                            client, state, status_msg, test_info
                         )
 
                     with gr.TabItem("🔑 Answer Key", id=2):
                         key_components = self._build_key_tab(
-                            client, state, status_msg, dashboard_components["test_info"]
+                            client, state, status_msg, test_info
                         )
 
                     with gr.TabItem("✅ Grade", id=3):
@@ -77,237 +83,9 @@ class BubbleTestWorkflow(BaseWorkflow):
         self._key_components = key_components
         self._grade_components = grade_components
 
-    def _build_dashboard(self, client, state, status_msg):
-        """Build the test selection dashboard."""
-        gr.Markdown("### Tests")
-
-        test_dropdown = gr.Dropdown(
-            label="Select Test",
-            choices=[],
-            interactive=True,
-            allow_custom_value=False,
-        )
-
-        with gr.Row():
-            refresh_btn = gr.Button("🔄 Refresh", size="sm")
-            load_btn = gr.Button("Load", variant="primary", size="sm")
-
-        # Test info display
-        test_info = gr.Markdown("*No test selected*")
-
-        gr.Markdown("---")
-
-        # Quick create section
-        gr.Markdown("### Quick Create")
-        quick_name = gr.Textbox(label="Test Name", placeholder="e.g., Quiz 1")
-        quick_create_btn = gr.Button("➕ Create New Test", variant="secondary")
-
-        # --- Event Handlers ---
-
-        async def refresh_tests(state_dict):
-            """Refresh the test list from server."""
-            st = BubbleTestState.from_dict(state_dict)
-            try:
-                result = await client.list_tests(limit=50)
-                tests = result.get("tests", [])
-                st.test_list_cache = tests
-                st.last_error = None
-
-                choices = [
-                    (f"{t['name']} ({t['status']})", t["id"])
-                    for t in tests
-                ]
-
-                return (
-                    st.to_dict(),
-                    gr.update(choices=choices, value=st.selected_test_id),
-                    "",
-                )
-            except BubbleMCPClientError as e:
-                st.last_error = str(e)
-                return (
-                    st.to_dict(),
-                    gr.update(),
-                    f"**Error:** {e}",
-                )
-
-        async def load_test(state_dict, test_id):
-            """Load a test and update all UI components."""
-            st = BubbleTestState.from_dict(state_dict)
-            if not test_id:
-                return (
-                    st.to_dict(),
-                    "*No test selected*",
-                    "",
-                )
-
-            try:
-                result = await client.get_test(test_id)
-                test = result.get("test", {})
-                sheet = result.get("sheet")
-                answer_key = result.get("answer_key")
-
-                st.selected_test_id = test_id
-                st.selected_test_name = test.get("name", "")
-                st.selected_test_status = test.get("status", "")
-                st.has_sheet = sheet is not None
-                st.num_questions = sheet.get("num_questions") if sheet else None
-                st.last_error = None
-
-                # Check for answer key - try multiple approaches
-                # 1. Check if included in get_test response
-                if answer_key is not None:
-                    st.has_key = True
-                    st.total_points = answer_key.get("total_points")
-                # 2. Check test status for KEY_ADDED
-                elif test.get("status") in ("KEY_ADDED", "READY", "GRADED"):
-                    st.has_key = True
-                    st.total_points = None
-                # 3. Explicitly fetch answer key to check
-                else:
-                    try:
-                        key_result = await client.get_answer_key(test_id)
-                        answers = key_result.get("answers", [])
-                        if answers and key_result.get("status") != "error":
-                            st.has_key = True
-                            st.total_points = key_result.get("total_points") or sum(
-                                a.get("points", 1.0) for a in answers
-                            )
-                        else:
-                            st.has_key = False
-                            st.total_points = None
-                    except BubbleMCPClientError:
-                        st.has_key = False
-                        st.total_points = None
-
-                # Clear job selection when switching tests
-                st.clear_job_selection()
-
-                # Build info display
-                info_lines = [
-                    f"**{st.selected_test_name}**",
-                    f"ID: `{test_id}`",
-                    f"Status: {st.selected_test_status}",
-                ]
-                if st.has_sheet:
-                    info_lines.append(f"Sheet: ✅ ({st.num_questions} questions)")
-                else:
-                    info_lines.append("Sheet: ❌ Not generated")
-                if st.has_key:
-                    points_str = f"{st.total_points} points" if st.total_points else "set"
-                    info_lines.append(f"Key: ✅ ({points_str})")
-                else:
-                    info_lines.append("Key: ❌ Not set")
-
-                return (
-                    st.to_dict(),
-                    "\n\n".join(info_lines),
-                    f"Loaded test: {st.selected_test_name}",
-                )
-            except BubbleMCPClientError as e:
-                st.last_error = str(e)
-                return (
-                    st.to_dict(),
-                    "*Error loading test*",
-                    f"**Error:** {e}",
-                )
-
-        async def quick_create_test(state_dict, name):
-            """Create a new test and select it."""
-            st = BubbleTestState.from_dict(state_dict)
-            if not name or not name.strip():
-                return (
-                    st.to_dict(),
-                    gr.update(),
-                    "*No test selected*",
-                    "**Error:** Test name is required",
-                    gr.update(),
-                )
-
-            try:
-                result = await client.create_test(name.strip())
-                test_id = result.get("test_id")
-
-                st.selected_test_id = test_id
-                st.selected_test_name = name.strip()
-                st.selected_test_status = "CREATED"
-                st.has_sheet = False
-                st.has_key = False
-                st.num_questions = None
-                st.total_points = None
-                st.last_error = None
-
-                # Refresh test list
-                list_result = await client.list_tests(limit=50)
-                tests = list_result.get("tests", [])
-                st.test_list_cache = tests
-                choices = [
-                    (f"{t['name']} ({t['status']})", t["id"])
-                    for t in tests
-                ]
-
-                info_lines = [
-                    f"**{st.selected_test_name}**",
-                    f"ID: `{test_id}`",
-                    f"Status: {st.selected_test_status}",
-                    "Sheet: ❌ Not generated",
-                    "Key: ❌ Not set",
-                ]
-
-                return (
-                    st.to_dict(),
-                    gr.update(choices=choices, value=test_id),
-                    "\n\n".join(info_lines),
-                    f"Created test: {name.strip()}",
-                    gr.update(value=""),  # Clear name input
-                )
-            except BubbleMCPClientError as e:
-                st.last_error = str(e)
-                return (
-                    st.to_dict(),
-                    gr.update(),
-                    "*No test selected*",
-                    f"**Error:** {e}",
-                    gr.update(),
-                )
-
-        # Wire up events
-        refresh_btn.click(
-            fn=refresh_tests,
-            inputs=[state],
-            outputs=[state, test_dropdown, status_msg],
-        )
-
-        load_btn.click(
-            fn=load_test,
-            inputs=[state, test_dropdown],
-            outputs=[state, test_info, status_msg],
-        )
-
-        quick_create_btn.click(
-            fn=quick_create_test,
-            inputs=[state, quick_name],
-            outputs=[state, test_dropdown, test_info, status_msg, quick_name],
-        )
-
-        # Auto-refresh on load
-        gr.on(
-            triggers=[],
-            fn=refresh_tests,
-            inputs=[state],
-            outputs=[state, test_dropdown, status_msg],
-        )
-
-        return {
-            "test_dropdown": test_dropdown,
-            "test_info": test_info,
-            "refresh_btn": refresh_btn,
-        }
-
-    def _build_create_tab(self, client, state, status_msg):
-        """Build the Create Test tab."""
+    def _build_create_panel(self, client, state, status_msg):
+        """Build the compact create test panel for the left sidebar."""
         gr.Markdown("### Create New Test")
-        gr.Markdown("Create a new bubble test to get started.")
 
         name_input = gr.Textbox(
             label="Test Name",
@@ -315,12 +93,11 @@ class BubbleTestWorkflow(BaseWorkflow):
             max_lines=1,
         )
         desc_input = gr.Textbox(
-            label="Description (optional)",
-            placeholder="Optional description for this test",
+            label="Description",
+            placeholder="Optional description",
             lines=2,
         )
-
-        create_btn = gr.Button("Create Test", variant="primary")
+        create_btn = gr.Button("➕ Create Test", variant="primary")
         create_result = gr.Markdown("")
 
         async def handle_create(state_dict, name, description):
@@ -345,7 +122,7 @@ class BubbleTestWorkflow(BaseWorkflow):
 
                 return (
                     st.to_dict(),
-                    f"✅ Created test: **{name.strip()}**\n\nID: `{test_id}`\n\nNow go to **Generate Sheet** tab.",
+                    f"✅ Created: **{name.strip()}**\n\nGo to Browse Tests to select it.",
                     f"Created test: {name.strip()}",
                 )
             except BubbleMCPClientError as e:
@@ -363,6 +140,417 @@ class BubbleTestWorkflow(BaseWorkflow):
         )
 
         return {"name_input": name_input, "create_btn": create_btn}
+
+    def _build_test_browser(self, client, state, status_msg, test_info):
+        """Build the test browser with filtering, sorting, and archive support."""
+        gr.Markdown("### Browse Tests")
+        gr.Markdown("Filter and select tests. Use archive to hide old tests.")
+
+        # --- Filter Controls ---
+        with gr.Group():
+            with gr.Row():
+                search_input = gr.Textbox(
+                    label="Search",
+                    placeholder="Search by name...",
+                    scale=2,
+                )
+                status_filter = gr.Dropdown(
+                    label="Status",
+                    choices=[
+                        ("All", ""),
+                        ("Created", "CREATED"),
+                        ("Sheet Generated", "SHEET_GENERATED"),
+                        ("Key Added", "KEY_ADDED"),
+                    ],
+                    value="",
+                    scale=1,
+                )
+
+            with gr.Row():
+                sort_by = gr.Dropdown(
+                    label="Sort By",
+                    choices=[
+                        ("Date Created", "created_at"),
+                        ("Name", "name"),
+                        ("Status", "status"),
+                    ],
+                    value="created_at",
+                    scale=1,
+                )
+                sort_order = gr.Dropdown(
+                    label="Order",
+                    choices=[
+                        ("Newest First", "desc"),
+                        ("Oldest First", "asc"),
+                    ],
+                    value="desc",
+                    scale=1,
+                )
+                show_archived = gr.Checkbox(
+                    label="Show Archived",
+                    value=False,
+                    scale=1,
+                )
+
+        # --- Test List ---
+        with gr.Row():
+            refresh_btn = gr.Button("🔄 Refresh", size="sm")
+            filter_btn = gr.Button("Apply Filters", variant="primary", size="sm")
+
+        # Pagination info
+        pagination_info = gr.Markdown("*Loading tests...*")
+
+        test_dropdown = gr.Dropdown(
+            label="Select Test",
+            choices=[],
+            interactive=True,
+            allow_custom_value=False,
+        )
+
+        with gr.Row():
+            load_btn = gr.Button("Load Selected", variant="primary")
+            archive_btn = gr.Button("📦 Archive", variant="secondary", size="sm")
+            unarchive_btn = gr.Button("📤 Unarchive", variant="secondary", size="sm", visible=False)
+
+        # --- Event Handlers ---
+
+        async def refresh_tests(state_dict, search, status, sort_field, order, include_archived):
+            """Refresh the test list with current filters."""
+            st = BubbleTestState.from_dict(state_dict)
+            try:
+                result = await client.list_tests(
+                    limit=100,
+                    search=search if search else None,
+                    status=status if status else None,
+                    sort_by=sort_field,
+                    sort_order=order,
+                    include_archived=include_archived,
+                )
+                tests = result.get("tests", [])
+                total = result.get("total", len(tests))
+                st.test_list_cache = tests
+                st.last_error = None
+
+                choices = []
+                for t in tests:
+                    name = t["name"]
+                    status_str = t["status"]
+                    archived = t.get("archived", False)
+                    if archived:
+                        label = f"📦 {name} ({status_str}) [ARCHIVED]"
+                    else:
+                        label = f"{name} ({status_str})"
+                    choices.append((label, t["id"]))
+
+                pagination_text = f"Showing {len(tests)} of {total} tests"
+
+                return (
+                    st.to_dict(),
+                    gr.update(choices=choices, value=st.selected_test_id if st.selected_test_id in [c[1] for c in choices] else None),
+                    pagination_text,
+                    "",
+                )
+            except BubbleMCPClientError as e:
+                st.last_error = str(e)
+                return (
+                    st.to_dict(),
+                    gr.update(),
+                    "*Error loading tests*",
+                    f"**Error:** {e}",
+                )
+
+        async def load_test(state_dict, test_id, include_archived):
+            """Load a test and update all UI components."""
+            st = BubbleTestState.from_dict(state_dict)
+            if not test_id:
+                return (
+                    st.to_dict(),
+                    "*No test selected*",
+                    "",
+                    gr.update(visible=True),
+                    gr.update(visible=False),
+                )
+
+            try:
+                result = await client.get_test(test_id)
+                test = result.get("test", {})
+                sheet = result.get("sheet")
+                answer_key = result.get("answer_key")
+
+                st.selected_test_id = test_id
+                st.selected_test_name = test.get("name", "")
+                st.selected_test_status = test.get("status", "")
+                st.has_sheet = sheet is not None
+                st.num_questions = sheet.get("num_questions") if sheet else None
+                st.last_error = None
+
+                # Check for answer key
+                if answer_key is not None:
+                    st.has_key = True
+                    st.total_points = answer_key.get("total_points")
+                elif test.get("status") in ("KEY_ADDED", "READY", "GRADED"):
+                    st.has_key = True
+                    st.total_points = None
+                else:
+                    try:
+                        key_result = await client.get_answer_key(test_id)
+                        answers = key_result.get("answers", [])
+                        if answers and key_result.get("status") != "error":
+                            st.has_key = True
+                            st.total_points = key_result.get("total_points") or sum(
+                                a.get("points", 1.0) for a in answers
+                            )
+                        else:
+                            st.has_key = False
+                            st.total_points = None
+                    except BubbleMCPClientError:
+                        st.has_key = False
+                        st.total_points = None
+
+                st.clear_job_selection()
+
+                # Check if test is archived (from cache)
+                is_archived = False
+                for t in st.test_list_cache:
+                    if t.get("id") == test_id:
+                        is_archived = t.get("archived", False)
+                        break
+
+                # Build info display
+                info_lines = [
+                    f"**{st.selected_test_name}**",
+                    f"ID: `{test_id}`",
+                    f"Status: {st.selected_test_status}",
+                ]
+                if is_archived:
+                    info_lines.append("**📦 ARCHIVED**")
+                if st.has_sheet:
+                    info_lines.append(f"Sheet: ✅ ({st.num_questions} questions)")
+                else:
+                    info_lines.append("Sheet: ❌ Not generated")
+                if st.has_key:
+                    points_str = f"{st.total_points} points" if st.total_points else "set"
+                    info_lines.append(f"Key: ✅ ({points_str})")
+                else:
+                    info_lines.append("Key: ❌ Not set")
+
+                return (
+                    st.to_dict(),
+                    "\n\n".join(info_lines),
+                    f"Loaded test: {st.selected_test_name}",
+                    gr.update(visible=not is_archived),  # Archive btn
+                    gr.update(visible=is_archived),  # Unarchive btn
+                )
+            except BubbleMCPClientError as e:
+                st.last_error = str(e)
+                return (
+                    st.to_dict(),
+                    "*Error loading test*",
+                    f"**Error:** {e}",
+                    gr.update(),
+                    gr.update(),
+                )
+
+        async def archive_test(state_dict, dropdown_value, search, status, sort_field, order, include_archived):
+            """Archive the currently selected test."""
+            st = BubbleTestState.from_dict(state_dict)
+            # Use dropdown value if state doesn't have selected test
+            test_id = st.selected_test_id or dropdown_value
+            if not test_id:
+                return (
+                    st.to_dict(),
+                    gr.update(),
+                    gr.update(),
+                    "*No test selected*",
+                    "**Error:** No test selected. Please select a test first.",
+                    gr.update(),
+                    gr.update(),
+                )
+
+            # Get test name from cache for the message
+            test_name = st.selected_test_name
+            if not test_name:
+                for t in st.test_list_cache:
+                    if t.get("id") == test_id:
+                        test_name = t.get("name", test_id)
+                        break
+                else:
+                    test_name = test_id
+
+            try:
+                await client.archive_test(test_id)
+
+                # Refresh the list
+                result = await client.list_tests(
+                    limit=100,
+                    search=search if search else None,
+                    status=status if status else None,
+                    sort_by=sort_field,
+                    sort_order=order,
+                    include_archived=include_archived,
+                )
+                tests = result.get("tests", [])
+                total = result.get("total", len(tests))
+                st.test_list_cache = tests
+
+                choices = []
+                for t in tests:
+                    name = t["name"]
+                    status_str = t["status"]
+                    archived = t.get("archived", False)
+                    if archived:
+                        label = f"📦 {name} ({status_str}) [ARCHIVED]"
+                    else:
+                        label = f"{name} ({status_str})"
+                    choices.append((label, t["id"]))
+
+                pagination_text = f"Showing {len(tests)} of {total} tests"
+
+                return (
+                    st.to_dict(),
+                    gr.update(choices=choices, value=None),
+                    pagination_text,
+                    "*Test archived*",
+                    f"Archived: {test_name}",
+                    gr.update(visible=False),  # Hide archive btn
+                    gr.update(visible=True),  # Show unarchive btn
+                )
+            except BubbleMCPClientError as e:
+                return (
+                    st.to_dict(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    f"**Error:** {e}",
+                    gr.update(),
+                    gr.update(),
+                )
+
+        async def unarchive_test(state_dict, dropdown_value, search, status, sort_field, order, include_archived):
+            """Unarchive the currently selected test."""
+            st = BubbleTestState.from_dict(state_dict)
+            # Use dropdown value if state doesn't have selected test
+            test_id = st.selected_test_id or dropdown_value
+            if not test_id:
+                return (
+                    st.to_dict(),
+                    gr.update(),
+                    gr.update(),
+                    "*No test selected*",
+                    "**Error:** No test selected. Please select a test first.",
+                    gr.update(),
+                    gr.update(),
+                )
+
+            # Get test name from cache for the message
+            test_name = st.selected_test_name
+            if not test_name:
+                for t in st.test_list_cache:
+                    if t.get("id") == test_id:
+                        test_name = t.get("name", test_id)
+                        break
+                else:
+                    test_name = test_id
+
+            try:
+                await client.unarchive_test(test_id)
+
+                # Refresh the list
+                result = await client.list_tests(
+                    limit=100,
+                    search=search if search else None,
+                    status=status if status else None,
+                    sort_by=sort_field,
+                    sort_order=order,
+                    include_archived=include_archived,
+                )
+                tests = result.get("tests", [])
+                total = result.get("total", len(tests))
+                st.test_list_cache = tests
+
+                choices = []
+                for t in tests:
+                    name = t["name"]
+                    status_str = t["status"]
+                    archived = t.get("archived", False)
+                    if archived:
+                        label = f"📦 {name} ({status_str}) [ARCHIVED]"
+                    else:
+                        label = f"{name} ({status_str})"
+                    choices.append((label, t["id"]))
+
+                pagination_text = f"Showing {len(tests)} of {total} tests"
+
+                # Re-select the test in the dropdown
+                selected_value = test_id if test_id in [c[1] for c in choices] else None
+
+                return (
+                    st.to_dict(),
+                    gr.update(choices=choices, value=selected_value),
+                    pagination_text,
+                    gr.update(),  # Keep test_info as is
+                    f"Unarchived: {test_name}",
+                    gr.update(visible=True),  # Show archive btn
+                    gr.update(visible=False),  # Hide unarchive btn
+                )
+            except BubbleMCPClientError as e:
+                return (
+                    st.to_dict(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    f"**Error:** {e}",
+                    gr.update(),
+                    gr.update(),
+                )
+
+        # Wire up events
+        filter_inputs = [state, search_input, status_filter, sort_by, sort_order, show_archived]
+        archive_inputs = [state, test_dropdown, search_input, status_filter, sort_by, sort_order, show_archived]
+
+        refresh_btn.click(
+            fn=refresh_tests,
+            inputs=filter_inputs,
+            outputs=[state, test_dropdown, pagination_info, status_msg],
+        )
+
+        filter_btn.click(
+            fn=refresh_tests,
+            inputs=filter_inputs,
+            outputs=[state, test_dropdown, pagination_info, status_msg],
+        )
+
+        load_btn.click(
+            fn=load_test,
+            inputs=[state, test_dropdown, show_archived],
+            outputs=[state, test_info, status_msg, archive_btn, unarchive_btn],
+        )
+
+        archive_btn.click(
+            fn=archive_test,
+            inputs=archive_inputs,
+            outputs=[state, test_dropdown, pagination_info, test_info, status_msg, archive_btn, unarchive_btn],
+        )
+
+        unarchive_btn.click(
+            fn=unarchive_test,
+            inputs=archive_inputs,
+            outputs=[state, test_dropdown, pagination_info, test_info, status_msg, archive_btn, unarchive_btn],
+        )
+
+        # Auto-refresh on load
+        gr.on(
+            triggers=[],
+            fn=refresh_tests,
+            inputs=filter_inputs,
+            outputs=[state, test_dropdown, pagination_info, status_msg],
+        )
+
+        return {
+            "test_dropdown": test_dropdown,
+            "test_info": test_info,
+            "refresh_btn": refresh_btn,
+        }
 
     def _build_sheet_tab(self, client, state, status_msg, test_info):
         """Build the Generate Sheet tab."""
@@ -999,26 +1187,36 @@ class BubbleTestWorkflow(BaseWorkflow):
         """Build the Grade tab with sub-workflow."""
         gr.Markdown("### Grade Bubble Sheets")
 
+        # --- Requirements Instructions ---
+        gr.Markdown(
+            "**Before grading, ensure the following:**\n\n"
+            "1. A test must be loaded (select from Browse Tests tab)\n"
+            "2. The test must have a **bubble sheet** generated\n"
+            "3. The test must have a **layout** (created with the sheet)\n"
+            "4. The test must have an **answer key** set\n\n"
+            "*The bubble sheet, layout, and answer key must all match the same test.*"
+        )
+
         grade_test_info = gr.Markdown("*Select a test with sheet and answer key*")
 
         # --- Current Job Status (prominent) ---
         current_job_status = gr.Markdown(
-            value="**Current Job:** None - Click '➕ New Job' to start grading",
+            value="**Current Job:** None - Click 'Start Grading' to begin",
             elem_classes=["job-status-box"],
         )
 
-        # --- Job Selection ---
-        gr.Markdown("#### Grading Jobs")
-        with gr.Row():
-            job_dropdown = gr.Dropdown(
-                label="Select Grading Job",
-                choices=[],
-                interactive=True,
-            )
-            refresh_jobs_btn = gr.Button("🔄", size="sm")
-            new_job_btn = gr.Button("➕ New Job", variant="primary", size="sm")
+        # Hidden dropdown for internal state management (not shown to user)
+        job_dropdown = gr.Dropdown(
+            label="Select Grading Job",
+            choices=[],
+            interactive=True,
+            visible=False,
+        )
 
         job_info = gr.Markdown("")
+
+        # --- Start Grading Button ---
+        start_grading_btn = gr.Button("Start Grading", variant="primary")
 
         # --- Upload Panel ---
         with gr.Group() as upload_group:
@@ -1088,7 +1286,16 @@ class BubbleTestWorkflow(BaseWorkflow):
                 return (
                     st.to_dict(),
                     gr.update(),
-                    "**⚠️ Error:** No test selected. Go back and load a test from the dashboard.",
+                    "**⚠️ Error:** No test selected. Go to Browse Tests tab and load a test first.",
+                    "",
+                    gr.update(),
+                )
+
+            if not st.has_sheet:
+                return (
+                    st.to_dict(),
+                    gr.update(),
+                    "**⚠️ Error:** Test must have a bubble sheet generated. Go to Generate Sheet tab first.",
                     "",
                     gr.update(),
                 )
@@ -1097,7 +1304,7 @@ class BubbleTestWorkflow(BaseWorkflow):
                 return (
                     st.to_dict(),
                     gr.update(),
-                    "**⚠️ Error:** Test must have an answer key before creating a grading job. Go to the Answer Key tab first.",
+                    "**⚠️ Error:** Test must have an answer key set. Go to Answer Key tab first.",
                     "",
                     gr.update(),
                 )
@@ -1314,22 +1521,10 @@ class BubbleTestWorkflow(BaseWorkflow):
                 )
 
         # Wire up events
-        refresh_jobs_btn.click(
-            fn=refresh_jobs,
-            inputs=[state],
-            outputs=[state, job_dropdown, status_msg],
-        )
-
-        new_job_btn.click(
+        start_grading_btn.click(
             fn=create_new_job,
             inputs=[state],
             outputs=[state, job_dropdown, job_info, status_msg, current_job_status],
-        )
-
-        job_dropdown.change(
-            fn=select_job,
-            inputs=[state, job_dropdown],
-            outputs=[state, job_info, current_job_status],
         )
 
         upload_btn.click(
@@ -1351,7 +1546,7 @@ class BubbleTestWorkflow(BaseWorkflow):
         )
 
         return {
-            "job_dropdown": job_dropdown,
+            "start_grading_btn": start_grading_btn,
             "grade_btn": grade_btn,
             "gradebook_file": gradebook_file,
         }

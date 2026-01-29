@@ -99,13 +99,51 @@ class BubbleMCPClient:
             "create_bubble_test", name=name, description=description
         )
 
-    async def list_tests(self, limit: int = 20) -> dict:
-        """List all bubble tests.
+    async def list_tests(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        search: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        include_archived: bool = False,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ) -> dict:
+        """List bubble tests with filtering, sorting, and pagination.
+
+        Args:
+            limit: Maximum tests to return
+            offset: Number of tests to skip (pagination)
+            status: Filter by status (CREATED, SHEET_GENERATED, KEY_ADDED)
+            search: Search in name/description
+            date_from: Filter by start date (ISO format)
+            date_to: Filter by end date (ISO format)
+            include_archived: Whether to include archived tests
+            sort_by: Sort field (created_at, name, status)
+            sort_order: Sort direction (asc, desc)
 
         Returns:
-            Result with tests list
+            Result with tests list, total count, pagination info
         """
-        return await self.call_tool("list_bubble_tests", limit=limit)
+        kwargs = {
+            "limit": limit,
+            "offset": offset,
+            "include_archived": include_archived,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+        }
+        if status:
+            kwargs["status"] = status
+        if search:
+            kwargs["search"] = search
+        if date_from:
+            kwargs["date_from"] = date_from
+        if date_to:
+            kwargs["date_to"] = date_to
+
+        return await self.call_tool("list_bubble_tests", **kwargs)
 
     async def get_test(self, test_id: str) -> dict:
         """Get detailed test information.
@@ -122,6 +160,22 @@ class BubbleMCPClient:
             Result with status
         """
         return await self.call_tool("delete_bubble_test", test_id=test_id)
+
+    async def archive_test(self, test_id: str) -> dict:
+        """Archive a test (soft delete).
+
+        Returns:
+            Result with status
+        """
+        return await self.call_tool("archive_bubble_test", test_id=test_id)
+
+    async def unarchive_test(self, test_id: str) -> dict:
+        """Unarchive a test (restore from archive).
+
+        Returns:
+            Result with status
+        """
+        return await self.call_tool("unarchive_bubble_test", test_id=test_id)
 
     # =========================================================================
     # Bubble Sheet Operations
