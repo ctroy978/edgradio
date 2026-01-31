@@ -302,3 +302,28 @@ class MCPClient:
             Result with text_content
         """
         return await self.call_tool("read_text_file", file_path=file_path)
+
+    async def add_custom_scrub_words(self, job_id: str, words: list[str]) -> dict:
+        """Add custom words/names to scrub for a job.
+
+        Args:
+            job_id: The job ID
+            words: List of words to scrub (e.g., ["Kaitlyn", "Mr. Cooper"])
+
+        Returns:
+            Result with words_saved count
+        """
+        return await self.call_tool(
+            "add_custom_scrub_words", job_id=job_id, words=words
+        )
+
+    async def get_custom_scrub_words(self, job_id: str) -> dict:
+        """Get custom scrub words for a job.
+
+        Args:
+            job_id: The job ID
+
+        Returns:
+            Result with words list
+        """
+        return await self.call_tool("get_custom_scrub_words", job_id=job_id)

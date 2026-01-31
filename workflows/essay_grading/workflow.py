@@ -164,6 +164,22 @@ class EssayGradingWorkflow(BaseWorkflow):
                         placeholder="Enter an Essay ID above and click 'Load Essay Preview' to see the essay content...",
                     )
 
+                    # Custom scrub words section
+                    gr.Markdown("---")
+                    gr.Markdown("### Additional Words to Scrub")
+                    gr.Markdown("Add nicknames, teacher names, or other words that should be removed from essays for FERPA compliance.")
+
+                    with gr.Row():
+                        custom_scrub_input = gr.Textbox(
+                            label="Custom Scrub Words",
+                            placeholder="Enter words separated by commas (e.g., Kaitlyn, Katie, Mr. Cooper)",
+                            lines=2,
+                            scale=3,
+                        )
+                        save_scrub_words_btn = gr.Button("Save Custom Words", scale=1)
+
+                    scrub_words_status = gr.Markdown()
+
                     with gr.Row():
                         validate_back_btn = gr.Button("← Back")
                         validate_refresh_btn = gr.Button("Refresh Names")
@@ -479,8 +495,12 @@ class EssayGradingWorkflow(BaseWorkflow):
 
         async def load_essay_preview(state_dict, essay_id):
             """Load the first 50 lines of a specific essay for identification."""
-            if essay_id is None or essay_id < 0:
-                return "Please enter a valid Essay ID"
+            if essay_id is None or essay_id <= 0:
+                return (
+                    "Please enter an Essay ID before clicking 'Load Essay Preview'.\n\n"
+                    "Find the Essay ID in the 'Student Names' table above, then enter "
+                    "that number in the 'Essay ID to Correct' field."
+                )
 
             state = WorkflowState.from_dict(state_dict)
             try:
@@ -518,7 +538,40 @@ class EssayGradingWorkflow(BaseWorkflow):
             outputs=[essay_preview],
         )
 
-        # Now wire up upload button with chain to load names
+        # Custom scrub words handlers (defined here so they can be used in chains below)
+        async def load_custom_scrub_words(state_dict):
+            """Load existing custom scrub words when entering Step 3."""
+            state = WorkflowState.from_dict(state_dict)
+            try:
+                result = await mcp_client.get_custom_scrub_words(state.job_id)
+                words = result.get("words", [])
+                if words:
+                    return ", ".join(words)
+                return ""
+            except MCPClientError:
+                return ""
+
+        async def save_custom_scrub_words(state_dict, words_text):
+            """Save custom scrub words to the database."""
+            state = WorkflowState.from_dict(state_dict)
+
+            if not words_text or not words_text.strip():
+                return "ℹ️ No custom words to save. Enter words separated by commas."
+
+            # Parse comma-separated words
+            words = [w.strip() for w in words_text.split(",") if w.strip()]
+
+            if not words:
+                return "ℹ️ No valid words found. Enter words separated by commas."
+
+            try:
+                result = await mcp_client.add_custom_scrub_words(state.job_id, words)
+                saved_count = result.get("words_saved", 0)
+                return f"✅ Saved {saved_count} custom scrub word(s): {', '.join(words)}"
+            except MCPClientError as e:
+                return f"❌ Error saving custom words: {e}"
+
+        # Now wire up upload button with chain to load names and custom scrub words
         upload_btn.click(
             fn=show_loading_disable,
             inputs=[],
@@ -538,6 +591,11 @@ class EssayGradingWorkflow(BaseWorkflow):
             outputs=[name_status, names_table],
             show_progress="hidden",
         ).then(
+            fn=load_custom_scrub_words,
+            inputs=[state],
+            outputs=[custom_scrub_input],
+            show_progress="hidden",
+        ).then(
             fn=hide_loading_enable,
             inputs=[],
             outputs=[loading_indicator, upload_btn],
@@ -545,6 +603,19 @@ class EssayGradingWorkflow(BaseWorkflow):
 
         async def handle_correction(state_dict, essay_id, corrected_name):
             state = WorkflowState.from_dict(state_dict)
+
+            if essay_id is None or essay_id <= 0:
+                return (
+                    "Please enter an Essay ID from the table above before applying a correction.",
+                    gr.update()
+                )
+
+            if not corrected_name or not corrected_name.strip():
+                return (
+                    "Please enter the corrected student name.",
+                    gr.update()
+                )
+
             try:
                 result = await mcp_client.correct_name(
                     state.job_id, int(essay_id), corrected_name
@@ -558,6 +629,12 @@ class EssayGradingWorkflow(BaseWorkflow):
             fn=handle_correction,
             inputs=[state, correction_essay_id, correction_name],
             outputs=[name_status, names_table],
+        )
+
+        save_scrub_words_btn.click(
+            fn=save_custom_scrub_words,
+            inputs=[state, custom_scrub_input],
+            outputs=[scrub_words_status],
         )
 
         validate_refresh_btn.click(
