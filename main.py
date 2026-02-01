@@ -7,6 +7,7 @@ from app.config import settings
 # Import workflows to register them
 from workflows.essay_grading.workflow import EssayGradingWorkflow  # noqa: F401
 from workflows.bubble_test.workflow import BubbleTestWorkflow  # noqa: F401
+from workflows.reading_handout.workflow import ReadingHandoutWorkflow  # noqa: F401
 from workflows.registry import WorkflowRegistry
 
 
