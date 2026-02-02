@@ -8,6 +8,7 @@ from app.config import settings
 from workflows.essay_grading.workflow import EssayGradingWorkflow  # noqa: F401
 from workflows.bubble_test.workflow import BubbleTestWorkflow  # noqa: F401
 from workflows.reading_handout.workflow import ReadingHandoutWorkflow  # noqa: F401
+from workflows.test_builder.workflow import TestBuilderWorkflow  # noqa: F401
 from workflows.registry import WorkflowRegistry
 
 
