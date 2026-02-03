@@ -38,6 +38,20 @@ class EssayGradingWorkflow(BaseWorkflow):
             self.build_ui_content()
         return app
 
+    def _wrap_button_click(self, btn, handler, inputs, outputs, action_status, action_text="Processing..."):
+        """Wrap a button click with loading state management."""
+        btn.click(
+            fn=lambda: (gr.update(interactive=False), f"⏳ {action_text}"),
+            outputs=[btn, action_status]
+        ).then(
+            fn=handler,
+            inputs=inputs,
+            outputs=outputs
+        ).then(
+            fn=lambda: (gr.update(interactive=True), ""),
+            outputs=[btn, action_status]
+        )
+
     def build_ui_content(self) -> None:
         """Build the Gradio UI content for embedding in a parent container."""
         # Initialize clients
@@ -49,11 +63,13 @@ class EssayGradingWorkflow(BaseWorkflow):
 
         # Header
         gr.Markdown("# 📝 Essay Grading Workflow")
-        gr.Markdown("Follow the steps below to grade your students' essays.")
+        # Status message area (below title for consistent placement)
+        status_msg = gr.Markdown("", elem_id="status_msg")
+        action_status = gr.Markdown("", elem_id="action_status")
 
         # Main layout: sidebar + content
         with gr.Row():
-            # Left sidebar with progress (hide loading indicator here)
+            # Left sidebar with progress
             with gr.Column(scale=1, min_width=200):
                 progress_display = gr.Markdown(
                     value=self._render_progress(self.create_initial_state()),
@@ -62,8 +78,6 @@ class EssayGradingWorkflow(BaseWorkflow):
 
             # Main content area
             with gr.Column(scale=4):
-                # Status message area (at top of content)
-                status_msg = gr.Markdown(visible=False)
 
                 # =========================================================
                 # STEP 1: Gather Materials
@@ -263,12 +277,6 @@ class EssayGradingWorkflow(BaseWorkflow):
 
                     restart_btn = gr.Button("Start New Grading Session", variant="primary")
 
-                # Loading indicator at bottom of content area
-                loading_indicator = gr.Markdown(
-                    value="**Processing...** Please wait.",
-                    visible=False,
-                )
-
         # =========================================================
         # EVENT HANDLERS
         # =========================================================
@@ -300,7 +308,7 @@ class EssayGradingWorkflow(BaseWorkflow):
                     return (
                         state.to_dict(),
                         self._render_progress(state),
-                        gr.update(visible=True, value="❌ Please upload a grading rubric (PDF or TXT)"),
+                        "❌ Please upload a grading rubric (PDF or TXT)",
                         *update_panels(0).values(),
                     )
 
@@ -320,7 +328,7 @@ class EssayGradingWorkflow(BaseWorkflow):
                     return (
                         state.to_dict(),
                         self._render_progress(state),
-                        gr.update(visible=True, value="❌ Could not read rubric file. Please upload a valid PDF or TXT file."),
+                        "❌ Could not read rubric file. Please upload a valid PDF or TXT file.",
                         *update_panels(0).values(),
                     )
 
@@ -349,7 +357,7 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"✅ Job created: `{job_id}`"),
+                    f"✅ Job created: `{job_id}`",
                     *update_panels(1).values(),
                 )
 
@@ -358,47 +366,32 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"❌ Error: {e}"),
+                    f"❌ Error: {e}",
                     *update_panels(0).values(),
                 )
 
-        # Helper to show loading indicator and disable button
-        def show_loading_disable():
-            return (
-                gr.update(visible=True, value="**Processing...** Please wait."),
-                gr.update(interactive=False),
-            )
-
-        # Helper to hide loading indicator and re-enable button
-        def hide_loading_enable():
-            return (
-                gr.update(visible=False),
-                gr.update(interactive=True),
-            )
-
-        gather_btn.click(
-            fn=show_loading_disable,
-            inputs=[],
-            outputs=[loading_indicator, gather_btn],
-        ).then(
-            fn=handle_gather,
+        self._wrap_button_click(
+            gather_btn,
+            handle_gather,
             inputs=[state, rubric_file, question_text, context_files, kb_topic, job_name],
             outputs=[
                 state, progress_display, status_msg,
                 step1_panel, step2_panel, step3_panel, step4_panel,
                 step5_panel, step6_panel, step7_panel, complete_panel,
             ],
-            show_progress="hidden",
-        ).then(
-            fn=hide_loading_enable,
-            inputs=[],
-            outputs=[loading_indicator, gather_btn],
+            action_status=action_status,
+            action_text="Saving materials...",
         )
 
-        # Step 2: Upload Essays
+        # Step 2: Upload Essays (consolidated with load_names and load_custom_scrub_words)
         async def handle_upload(state_dict, essay_files, essay_format):
             state = WorkflowState.from_dict(state_dict)
             state.mark_step_in_progress(1)
+
+            # Default values for name validation outputs
+            name_status_text = ""
+            names_rows = []
+            custom_words_text = ""
 
             try:
                 # Require essay format selection
@@ -407,7 +400,10 @@ class EssayGradingWorkflow(BaseWorkflow):
                     return (
                         state.to_dict(),
                         self._render_progress(state),
-                        gr.update(visible=True, value="❌ Please select an essay format (Handwritten or Typed)"),
+                        "❌ Please select an essay format (Handwritten or Typed)",
+                        name_status_text,
+                        names_rows,
+                        custom_words_text,
                         *update_panels(1).values(),
                     )
 
@@ -417,7 +413,10 @@ class EssayGradingWorkflow(BaseWorkflow):
                     return (
                         state.to_dict(),
                         self._render_progress(state),
-                        gr.update(visible=True, value="❌ Please upload at least one essay PDF"),
+                        "❌ Please upload at least one essay PDF",
+                        name_status_text,
+                        names_rows,
+                        custom_words_text,
                         *update_panels(1).values(),
                     )
 
@@ -442,10 +441,48 @@ class EssayGradingWorkflow(BaseWorkflow):
                 state.mark_step_complete(1)
                 state.current_step = 2
 
+                # Load names for step 3
+                try:
+                    names_result = await mcp_client.validate_names(state.job_id)
+                    matched = names_result.get("matched_students", [])
+                    mismatched = names_result.get("mismatched_students", [])
+
+                    for m in matched:
+                        names_rows.append([
+                            m.get("essay_id", ""),
+                            m.get("detected_name", ""),
+                            f"✅ Matched: {m.get('roster_name', '')}",
+                        ])
+                    for m in mismatched:
+                        names_rows.append([
+                            m.get("essay_id", ""),
+                            m.get("detected_name", ""),
+                            "❌ Needs Correction",
+                        ])
+
+                    if names_result.get("status", "") == "validated":
+                        name_status_text = "✅ All names validated!"
+                    else:
+                        name_status_text = f"⚠️ {len(mismatched)} name(s) need correction"
+                except MCPClientError:
+                    name_status_text = "❌ Error loading names"
+
+                # Load custom scrub words
+                try:
+                    scrub_result = await mcp_client.get_custom_scrub_words(state.job_id)
+                    words = scrub_result.get("words", [])
+                    if words:
+                        custom_words_text = ", ".join(words)
+                except MCPClientError:
+                    pass
+
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"✅ Processed {students} essays"),
+                    f"✅ Processed {students} essays",
+                    name_status_text,
+                    names_rows,
+                    custom_words_text,
                     *update_panels(2).values(),
                 )
 
@@ -454,7 +491,10 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"❌ Error: {e}"),
+                    f"❌ Error: {e}",
+                    name_status_text,
+                    names_rows,
+                    custom_words_text,
                     *update_panels(1).values(),
                 )
 
@@ -532,10 +572,13 @@ class EssayGradingWorkflow(BaseWorkflow):
             except MCPClientError as e:
                 return f"Error loading essay: {e}"
 
-        load_preview_btn.click(
-            fn=load_essay_preview,
+        self._wrap_button_click(
+            load_preview_btn,
+            load_essay_preview,
             inputs=[state, correction_essay_id],
             outputs=[essay_preview],
+            action_status=action_status,
+            action_text="Loading preview...",
         )
 
         # Custom scrub words handlers (defined here so they can be used in chains below)
@@ -571,34 +614,18 @@ class EssayGradingWorkflow(BaseWorkflow):
             except MCPClientError as e:
                 return f"❌ Error saving custom words: {e}"
 
-        # Now wire up upload button with chain to load names and custom scrub words
-        upload_btn.click(
-            fn=show_loading_disable,
-            inputs=[],
-            outputs=[loading_indicator, upload_btn],
-        ).then(
-            fn=handle_upload,
+        self._wrap_button_click(
+            upload_btn,
+            handle_upload,
             inputs=[state, essay_files, essay_format],
             outputs=[
                 state, progress_display, status_msg,
+                name_status, names_table, custom_scrub_input,
                 step1_panel, step2_panel, step3_panel, step4_panel,
                 step5_panel, step6_panel, step7_panel, complete_panel,
             ],
-            show_progress="hidden",
-        ).then(
-            fn=load_names,
-            inputs=[state],
-            outputs=[name_status, names_table],
-            show_progress="hidden",
-        ).then(
-            fn=load_custom_scrub_words,
-            inputs=[state],
-            outputs=[custom_scrub_input],
-            show_progress="hidden",
-        ).then(
-            fn=hide_loading_enable,
-            inputs=[],
-            outputs=[loading_indicator, upload_btn],
+            action_status=action_status,
+            action_text="Processing essays...",
         )
 
         async def handle_correction(state_dict, essay_id, corrected_name):
@@ -625,22 +652,31 @@ class EssayGradingWorkflow(BaseWorkflow):
             except MCPClientError as e:
                 return f"❌ Correction failed: {e}", gr.update()
 
-        correct_btn.click(
-            fn=handle_correction,
+        self._wrap_button_click(
+            correct_btn,
+            handle_correction,
             inputs=[state, correction_essay_id, correction_name],
             outputs=[name_status, names_table],
+            action_status=action_status,
+            action_text="Applying correction...",
         )
 
-        save_scrub_words_btn.click(
-            fn=save_custom_scrub_words,
+        self._wrap_button_click(
+            save_scrub_words_btn,
+            save_custom_scrub_words,
             inputs=[state, custom_scrub_input],
             outputs=[scrub_words_status],
+            action_status=action_status,
+            action_text="Saving words...",
         )
 
-        validate_refresh_btn.click(
-            fn=load_names,
+        self._wrap_button_click(
+            validate_refresh_btn,
+            load_names,
             inputs=[state],
             outputs=[name_status, names_table],
+            action_status=action_status,
+            action_text="Refreshing names...",
         )
 
         async def handle_validate_continue(state_dict):
@@ -680,7 +716,7 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"✅ Scrubbed {count} essays"),
+                    f"✅ Scrubbed {count} essays",
                     *update_panels(4).values(),
                 )
 
@@ -689,27 +725,21 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"❌ Error: {e}"),
+                    f"❌ Error: {e}",
                     *update_panels(3).values(),
                 )
 
-        scrub_btn.click(
-            fn=show_loading_disable,
-            inputs=[],
-            outputs=[loading_indicator, scrub_btn],
-        ).then(
-            fn=handle_scrub,
+        self._wrap_button_click(
+            scrub_btn,
+            handle_scrub,
             inputs=[state],
             outputs=[
                 state, progress_display, status_msg,
                 step1_panel, step2_panel, step3_panel, step4_panel,
                 step5_panel, step6_panel, step7_panel, complete_panel,
             ],
-            show_progress="hidden",
-        ).then(
-            fn=hide_loading_enable,
-            inputs=[],
-            outputs=[loading_indicator, scrub_btn],
+            action_status=action_status,
+            action_text="Scrubbing PII...",
         )
 
         # Step 5: Evaluate Essays
@@ -764,7 +794,7 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"✅ Evaluated {evaluated} essays"),
+                    f"✅ Evaluated {evaluated} essays",
                     *update_panels(5).values(),
                 )
 
@@ -773,33 +803,30 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"❌ Error: {e}"),
+                    f"❌ Error: {e}",
                     *update_panels(4).values(),
                 )
 
-        eval_btn.click(
-            fn=show_loading_disable,
-            inputs=[],
-            outputs=[loading_indicator, eval_btn],
-        ).then(
-            fn=handle_evaluate,
+        self._wrap_button_click(
+            eval_btn,
+            handle_evaluate,
             inputs=[state],
             outputs=[
                 state, progress_display, status_msg,
                 step1_panel, step2_panel, step3_panel, step4_panel,
                 step5_panel, step6_panel, step7_panel, complete_panel,
             ],
-            show_progress="hidden",
-        ).then(
-            fn=hide_loading_enable,
-            inputs=[],
-            outputs=[loading_indicator, eval_btn],
+            action_status=action_status,
+            action_text="Evaluating essays...",
         )
 
-        # Step 6: Generate Reports
+        # Step 6: Generate Reports (consolidated with email preflight)
         async def handle_reports(state_dict):
             state = WorkflowState.from_dict(state_dict)
             state.mark_step_in_progress(5)
+
+            # Default email preflight text
+            email_preflight_text = ""
 
             try:
                 # Generate gradebook
@@ -820,12 +847,29 @@ class EssayGradingWorkflow(BaseWorkflow):
                 state.mark_step_complete(5)
                 state.current_step = 6
 
+                # Load email preflight info
+                try:
+                    preflight_result = await mcp_client.identify_email_problems(state.job_id)
+                    ready = preflight_result.get("ready_to_send", 0)
+                    problems = preflight_result.get("students_needing_help", [])
+
+                    if problems:
+                        email_preflight_text = f"**Ready to send:** {ready} students\n\n"
+                        email_preflight_text += "**Issues found:**\n"
+                        for p in problems:
+                            email_preflight_text += f"- Essay {p.get('essay_id')}: {p.get('problem')} ({p.get('reason')})\n"
+                    else:
+                        email_preflight_text = f"**Ready to send:** {ready} students\n\n✅ No issues found!"
+                except MCPClientError:
+                    email_preflight_text = "❌ Error loading email status"
+
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value="✅ Reports generated!"),
+                    "✅ Reports generated!",
                     gr.update(value=gradebook_path),
                     gr.update(value=feedback_path),
+                    email_preflight_text,
                     *update_panels(6).values(),
                 )
 
@@ -834,53 +878,25 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"❌ Error: {e}"),
+                    f"❌ Error: {e}",
                     gr.update(), gr.update(),
+                    email_preflight_text,
                     *update_panels(5).values(),
                 )
 
-        # Step 7: Send Emails - define preflight first so we can chain to it
-        async def handle_email_preflight(state_dict):
-            state = WorkflowState.from_dict(state_dict)
-            try:
-                result = await mcp_client.identify_email_problems(state.job_id)
-                ready = result.get("ready_to_send", 0)
-                problems = result.get("students_needing_help", [])
-
-                if problems:
-                    text = f"**Ready to send:** {ready} students\n\n"
-                    text += "**Issues found:**\n"
-                    for p in problems:
-                        text += f"- Essay {p.get('essay_id')}: {p.get('problem')} ({p.get('reason')})\n"
-                else:
-                    text = f"**Ready to send:** {ready} students\n\n✅ No issues found!"
-
-                return text
-            except MCPClientError as e:
-                return f"❌ Error: {e}"
-
-        # Now wire up reports button with chain to load email preflight
-        reports_btn.click(
-            fn=show_loading_disable,
-            inputs=[],
-            outputs=[loading_indicator, reports_btn],
-        ).then(
-            fn=handle_reports,
+        self._wrap_button_click(
+            reports_btn,
+            handle_reports,
             inputs=[state],
             outputs=[
                 state, progress_display, status_msg,
                 gradebook_download, feedback_download,
+                email_preflight,
                 step1_panel, step2_panel, step3_panel, step4_panel,
                 step5_panel, step6_panel, step7_panel, complete_panel,
             ],
-        ).then(
-            fn=handle_email_preflight,
-            inputs=[state],
-            outputs=[email_preflight],
-        ).then(
-            fn=hide_loading_enable,
-            inputs=[],
-            outputs=[loading_indicator, reports_btn],
+            action_status=action_status,
+            action_text="Generating reports...",
         )
 
         async def handle_send_emails(state_dict):
@@ -899,7 +915,7 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"✅ Sent {sent} emails ({skipped} skipped)"),
+                    f"✅ Sent {sent} emails ({skipped} skipped)",
                     *update_panels(7).values(),
                     f"**Summary:**\n- Job ID: `{state.job_id}`\n- Emails sent: {sent}\n- Reports generated: Yes",
                 )
@@ -909,7 +925,7 @@ class EssayGradingWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    gr.update(visible=True, value=f"❌ Error: {e}"),
+                    f"❌ Error: {e}",
                     *update_panels(6).values(),
                     "",
                 )
@@ -926,12 +942,9 @@ class EssayGradingWorkflow(BaseWorkflow):
                 f"**Summary:**\n- Job ID: `{state.job_id}`\n- Emails: Skipped\n- Reports generated: Yes",
             )
 
-        email_btn.click(
-            fn=show_loading_disable,
-            inputs=[],
-            outputs=[loading_indicator, email_btn],
-        ).then(
-            fn=handle_send_emails,
+        self._wrap_button_click(
+            email_btn,
+            handle_send_emails,
             inputs=[state],
             outputs=[
                 state, progress_display, status_msg,
@@ -939,10 +952,8 @@ class EssayGradingWorkflow(BaseWorkflow):
                 step5_panel, step6_panel, step7_panel, complete_panel,
                 completion_summary,
             ],
-        ).then(
-            fn=hide_loading_enable,
-            inputs=[],
-            outputs=[loading_indicator, email_btn],
+            action_status=action_status,
+            action_text="Sending emails...",
         )
 
         email_skip_btn.click(
