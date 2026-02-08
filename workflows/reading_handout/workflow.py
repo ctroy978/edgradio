@@ -58,7 +58,7 @@ class ReadingHandoutWorkflow(BaseWorkflow):
         )
 
         gr.Markdown("# Reading Handout Generator")
-        gr.Markdown("Create professional reading handouts using LaTeX templates.")
+        subtitle = gr.Markdown("Create professional reading handouts using LaTeX templates.")
 
         # Status message area
         status_msg = gr.Markdown("", elem_id="status_msg")
@@ -118,6 +118,13 @@ class ReadingHandoutWorkflow(BaseWorkflow):
 
         # === Event Handlers ===
 
+        def start_generation():
+            """Show loading state when generation starts."""
+            return (
+                "**Generating reading handout...**",
+                gr.update(interactive=False),
+            )
+
         async def handle_generate(state_dict, template, title, author, content, footnotes):
             """Generate the PDF and move to download step."""
             # Validate required fields
@@ -129,6 +136,8 @@ class ReadingHandoutWorkflow(BaseWorkflow):
                     gr.update(visible=False),
                     gr.update(),
                     gr.update(visible=False),
+                    "Create professional reading handouts using LaTeX templates.",
+                    gr.update(interactive=True),
                 )
 
             if not content or not content.strip():
@@ -139,6 +148,8 @@ class ReadingHandoutWorkflow(BaseWorkflow):
                     gr.update(visible=False),
                     gr.update(),
                     gr.update(visible=False),
+                    "Create professional reading handouts using LaTeX templates.",
+                    gr.update(interactive=True),
                 )
 
             # Update state
@@ -178,6 +189,8 @@ class ReadingHandoutWorkflow(BaseWorkflow):
                     gr.update(visible=True),
                     f"**Success!** Your handout has been generated.\n\nTemplate: {template}\n\nClick below to download.",
                     gr.update(value=str(pdf_path), visible=True),
+                    "Create professional reading handouts using LaTeX templates.",
+                    gr.update(interactive=True),
                 )
 
             except LatexMCPClientError as e:
@@ -198,6 +211,8 @@ class ReadingHandoutWorkflow(BaseWorkflow):
                     gr.update(visible=False),
                     gr.update(),
                     gr.update(visible=False),
+                    "Create professional reading handouts using LaTeX templates.",
+                    gr.update(interactive=True),
                 )
 
         def handle_create_another(state_dict):
@@ -224,9 +239,12 @@ class ReadingHandoutWorkflow(BaseWorkflow):
 
         # Wire up events
         generate_btn.click(
+            fn=start_generation,
+            outputs=[subtitle, generate_btn],
+        ).then(
             fn=handle_generate,
             inputs=[state, template_dropdown, title_input, author_input, content_input, footnotes_input],
-            outputs=[state, status_msg, configure_container, download_container, download_status, pdf_download],
+            outputs=[state, status_msg, configure_container, download_container, download_status, pdf_download, subtitle, generate_btn],
         )
 
         create_another_btn.click(
