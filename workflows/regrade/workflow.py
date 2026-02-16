@@ -569,6 +569,14 @@ class EssayRegradeWorkflow(BaseWorkflow):
                 state.data["identity_map"] = identity_map
                 state.essays_processed = True
 
+                # Persist identity map to job metadata for Phase 2 review
+                try:
+                    await regrade_client.set_job_metadata(
+                        state.job_id, "identity_map", identity_map
+                    )
+                except RegradeMCPClientError:
+                    pass  # Non-fatal: review workflow can still work with anon IDs
+
                 # Grade all essays
                 grade_result = await regrade_client.grade_job(state.job_id)
 

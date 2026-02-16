@@ -11,6 +11,7 @@ from workflows.reading_handout.workflow import ReadingHandoutWorkflow  # noqa: F
 from workflows.test_builder.workflow import TestBuilderWorkflow  # noqa: F401
 from workflows.document_scrub.workflow import DocumentScrubWorkflow  # noqa: F401
 from workflows.regrade.workflow import EssayRegradeWorkflow  # noqa: F401
+from workflows.review.workflow import TeacherReviewWorkflow  # noqa: F401
 from workflows.registry import WorkflowRegistry
 
 

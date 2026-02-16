@@ -121,13 +121,16 @@ class RegradeMCPClient:
         """
         return await self.call_tool("get_job", job_id=job_id)
 
-    async def list_jobs(self) -> dict:
-        """List all grading jobs.
+    async def list_jobs(self, status: str | None = None) -> dict:
+        """List grading jobs, optionally filtered by status.
 
         Returns:
             Result with jobs list
         """
-        return await self.call_tool("list_jobs")
+        kwargs: dict[str, Any] = {}
+        if status:
+            kwargs["status"] = status
+        return await self.call_tool("list_jobs", **kwargs)
 
     async def update_job(self, job_id: str, **kwargs) -> dict:
         """Update job settings.
@@ -177,7 +180,7 @@ class RegradeMCPClient:
         """
         return await self.call_tool("get_job_essays", job_id=job_id)
 
-    async def get_essay_detail(self, job_id: str, essay_id: str) -> dict:
+    async def get_essay_detail(self, job_id: str, essay_id: int) -> dict:
         """Get detailed results for a single essay.
 
         Returns:
@@ -220,3 +223,96 @@ class RegradeMCPClient:
             Result with grade distribution, averages, per-criteria scores
         """
         return await self.call_tool("get_job_statistics", job_id=job_id)
+
+    # =========================================================================
+    # Metadata
+    # =========================================================================
+
+    async def set_job_metadata(self, job_id: str, key: str, value: Any) -> dict:
+        """Store a key-value pair in job metadata.
+
+        Returns:
+            Result with status
+        """
+        import json as _json
+
+        value_str = _json.dumps(value) if not isinstance(value, str) else value
+        return await self.call_tool("set_job_metadata", job_id=job_id, key=key, value=value_str)
+
+    async def get_job_metadata(self, job_id: str, key: str = "") -> dict:
+        """Retrieve job metadata.
+
+        Returns:
+            Result with metadata value(s)
+        """
+        kwargs: dict[str, Any] = {"job_id": job_id}
+        if key:
+            kwargs["key"] = key
+        return await self.call_tool("get_job_metadata", **kwargs)
+
+    # =========================================================================
+    # Teacher Review (Phase 2)
+    # =========================================================================
+
+    async def update_essay_review(
+        self,
+        job_id: str,
+        essay_id: int,
+        teacher_grade: str = "",
+        teacher_comments: str = "",
+        teacher_annotations: str = "",
+        status: str = "",
+    ) -> dict:
+        """Save teacher review data for an essay.
+
+        Returns:
+            Result with status
+        """
+        kwargs: dict[str, Any] = {"job_id": job_id, "essay_id": essay_id}
+        if teacher_grade:
+            kwargs["teacher_grade"] = teacher_grade
+        if teacher_comments:
+            kwargs["teacher_comments"] = teacher_comments
+        if teacher_annotations:
+            kwargs["teacher_annotations"] = teacher_annotations
+        if status:
+            kwargs["status"] = status
+        return await self.call_tool("update_essay_review", **kwargs)
+
+    async def finalize_job(
+        self, job_id: str, refine_comments: bool = True, model: str = ""
+    ) -> dict:
+        """Finalize a regrade job, optionally refining comments with AI.
+
+        Returns:
+            Result with finalization summary
+        """
+        kwargs: dict[str, Any] = {"job_id": job_id, "refine_comments": refine_comments}
+        if model:
+            kwargs["model"] = model
+        return await self.call_tool("finalize_job", **kwargs)
+
+    async def refine_essay_comments(
+        self, job_id: str, essay_ids: list[int] | None = None, model: str = ""
+    ) -> dict:
+        """AI-polish teacher comments on essays.
+
+        Returns:
+            Result with refinement summary
+        """
+        kwargs: dict[str, Any] = {"job_id": job_id}
+        if essay_ids:
+            kwargs["essay_ids"] = essay_ids
+        if model:
+            kwargs["model"] = model
+        return await self.call_tool("refine_essay_comments", **kwargs)
+
+    async def generate_student_report(self, job_id: str, essay_id: int) -> dict:
+        """Generate an HTML feedback report for a student essay.
+
+        Returns:
+            Result with HTML report content
+        """
+        return await self.call_tool(
+            "generate_student_report", job_id=job_id, essay_id=essay_id
+        )
