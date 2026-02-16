@@ -43,6 +43,11 @@ class Settings(BaseSettings):
         Path.home() / "Work" / "edmcp" / "edmcp-scrub" / "server.py"
     )
 
+    # Regrade MCP Server settings
+    regrade_mcp_server_path: str = str(
+        Path.home() / "Work" / "edmcp" / "edmcp-regrade" / "server.py"
+    )
+
     # Optional: Brevo email settings (usually handled by MCP server)
     brevo_api_key: str | None = None
 

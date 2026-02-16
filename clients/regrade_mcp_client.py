@@ -1,0 +1,222 @@
+"""Regrade MCP Client - Connects to edmcp-regrade FastMCP server via stdio."""
+
+import json
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+from app.config import settings
+
+
+class RegradeMCPClientError(Exception):
+    """Error raised by Regrade MCP client operations."""
+
+    pass
+
+
+@asynccontextmanager
+async def get_regrade_mcp_session():
+    """Create and manage Regrade MCP client session via stdio.
+
+    Yields:
+        ClientSession: Active MCP client session
+    """
+    server_path = settings.regrade_mcp_server_path
+    if not server_path:
+        raise RegradeMCPClientError("REGRADE_MCP_SERVER_PATH not configured")
+
+    server_path = Path(server_path).expanduser()
+    if not server_path.exists():
+        raise RegradeMCPClientError(f"Regrade MCP server script not found: {server_path}")
+
+    server_dir = server_path.parent
+
+    server_params = StdioServerParameters(
+        command="uv",
+        args=["run", "python", str(server_path)],
+        cwd=str(server_dir),
+        env=None,
+    )
+
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            yield session
+
+
+class RegradeMCPClient:
+    """High-level MCP client for calling edmcp-regrade server tools."""
+
+    def __init__(self):
+        self._tools_cache: dict[str, dict] | None = None
+
+    async def call_tool(self, tool_name: str, **kwargs) -> dict[str, Any]:
+        """Call an MCP tool and return the parsed result.
+
+        Args:
+            tool_name: Name of the tool to call
+            **kwargs: Tool arguments
+
+        Returns:
+            Parsed JSON result from the tool
+
+        Raises:
+            RegradeMCPClientError: If tool call fails
+        """
+        async with get_regrade_mcp_session() as session:
+            try:
+                result = await session.call_tool(tool_name, arguments=kwargs)
+
+                if result.content:
+                    text_content = "\n".join(
+                        item.text for item in result.content if hasattr(item, "text")
+                    )
+                    try:
+                        return json.loads(text_content)
+                    except json.JSONDecodeError:
+                        return {"raw_text": text_content}
+
+                return {"status": "success", "message": "Tool executed (no output)"}
+
+            except Exception as e:
+                raise RegradeMCPClientError(f"Tool call failed: {tool_name} - {e}") from e
+
+    # =========================================================================
+    # Job Management
+    # =========================================================================
+
+    async def create_job(
+        self,
+        job_name: str,
+        rubric: str,
+        essay_question: str | None = None,
+        class_name: str | None = None,
+        assignment_title: str | None = None,
+        due_date: str | None = None,
+    ) -> dict:
+        """Create a new grading job.
+
+        Returns:
+            Result with job_id, name, status
+        """
+        kwargs: dict[str, Any] = {"name": job_name, "rubric": rubric}
+        if essay_question:
+            kwargs["question_text"] = essay_question
+        if class_name:
+            kwargs["class_name"] = class_name
+        if assignment_title:
+            kwargs["assignment_title"] = assignment_title
+        if due_date:
+            kwargs["due_date"] = due_date
+        return await self.call_tool("create_regrade_job", **kwargs)
+
+    async def get_job(self, job_id: str) -> dict:
+        """Get job details.
+
+        Returns:
+            Result with job details
+        """
+        return await self.call_tool("get_job", job_id=job_id)
+
+    async def list_jobs(self) -> dict:
+        """List all grading jobs.
+
+        Returns:
+            Result with jobs list
+        """
+        return await self.call_tool("list_jobs")
+
+    async def update_job(self, job_id: str, **kwargs) -> dict:
+        """Update job settings.
+
+        Returns:
+            Result with updated job details
+        """
+        return await self.call_tool("update_job", job_id=job_id, **kwargs)
+
+    async def archive_job(self, job_id: str) -> dict:
+        """Archive a completed job.
+
+        Returns:
+            Result with status
+        """
+        return await self.call_tool("archive_job", job_id=job_id)
+
+    # =========================================================================
+    # Essay Management
+    # =========================================================================
+
+    async def add_essay(self, job_id: str, essay_id: str, essay_text: str) -> dict:
+        """Add a single essay to a job.
+
+        Returns:
+            Result with essay_id, status
+        """
+        return await self.call_tool(
+            "add_essay", job_id=job_id, student_identifier=essay_id, essay_text=essay_text
+        )
+
+    async def add_essays_from_directory(self, job_id: str, directory_path: str) -> dict:
+        """Add essays from a directory to a job.
+
+        Returns:
+            Result with essays_added count
+        """
+        return await self.call_tool(
+            "add_essays_from_directory", job_id=job_id, directory_path=directory_path
+        )
+
+    async def get_job_essays(self, job_id: str) -> dict:
+        """Get all essays in a job with their grades.
+
+        Returns:
+            Result with essays list
+        """
+        return await self.call_tool("get_job_essays", job_id=job_id)
+
+    async def get_essay_detail(self, job_id: str, essay_id: str) -> dict:
+        """Get detailed results for a single essay.
+
+        Returns:
+            Result with essay details and grade breakdown
+        """
+        return await self.call_tool(
+            "get_essay_detail", job_id=job_id, essay_id=essay_id
+        )
+
+    # =========================================================================
+    # Source Material
+    # =========================================================================
+
+    async def add_source_material(self, job_id: str, file_paths: list[str]) -> dict:
+        """Add source/reference material to a job.
+
+        Returns:
+            Result with materials_added count
+        """
+        return await self.call_tool(
+            "add_source_material", job_id=job_id, file_paths=file_paths
+        )
+
+    # =========================================================================
+    # Grading
+    # =========================================================================
+
+    async def grade_job(self, job_id: str) -> dict:
+        """Grade all essays in a job. Long-running operation.
+
+        Returns:
+            Result with grading results summary
+        """
+        return await self.call_tool("grade_job", job_id=job_id)
+
+    async def get_job_statistics(self, job_id: str) -> dict:
+        """Get grading statistics for a job.
+
+        Returns:
+            Result with grade distribution, averages, per-criteria scores
+        """
+        return await self.call_tool("get_job_statistics", job_id=job_id)
