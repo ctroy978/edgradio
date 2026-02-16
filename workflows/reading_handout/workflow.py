@@ -10,11 +10,11 @@ from workflows.base import BaseWorkflow, WorkflowStep
 from workflows.registry import WorkflowRegistry
 
 
-# Template descriptions for the dropdown
-TEMPLATE_CHOICES = [
-    ("Simple - Single-column, clean formatting", "simple"),
-    ("Academic - Two-column with title banner", "academic"),
-    ("Quiz - Worksheet format with name/date fields", "quiz"),
+# Fallback template choices if MCP server is unavailable
+FALLBACK_TEMPLATE_CHOICES = [
+    ("Simple - Minimal single-column document with clean formatting", "simple"),
+    ("Academic - Two-column academic handout with title banner and footnotes section", "academic"),
+    ("Quiz - Quiz/worksheet format with name and date fields", "quiz"),
 ]
 
 
@@ -37,6 +37,8 @@ class ReadingHandoutWorkflow(BaseWorkflow):
         """Build standalone Gradio app."""
         with gr.Blocks(title="Reading Handout Generator") as app:
             self.build_ui_content()
+            for fn, outputs in getattr(self, "_load_events", []):
+                app.load(fn=fn, outputs=outputs)
         return app
 
     def build_ui_content(self) -> None:
@@ -69,10 +71,23 @@ class ReadingHandoutWorkflow(BaseWorkflow):
 
             template_dropdown = gr.Dropdown(
                 label="Template",
-                choices=TEMPLATE_CHOICES,
+                choices=FALLBACK_TEMPLATE_CHOICES,
                 value="simple",
                 info="Select a template style for your handout",
             )
+
+            async def _load_templates():
+                try:
+                    templates = await client.list_templates()
+                    choices = [
+                        (f"{t['name'].title()} - {t['description']}", t["name"])
+                        for t in templates
+                    ]
+                    return gr.update(choices=choices, value="simple")
+                except Exception:
+                    return gr.update()
+
+            self._load_events = [(_load_templates, [template_dropdown])]
 
             title_input = gr.Textbox(
                 label="Title",

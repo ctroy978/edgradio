@@ -69,6 +69,8 @@ def create_app() -> gr.Blocks:
         workflow_containers = {}
         back_buttons = {}
 
+        load_events = []
+
         for name, _, _ in workflows:
             with gr.Column(visible=False) as container:
                 # Back button at top
@@ -79,6 +81,7 @@ def create_app() -> gr.Blocks:
                 # Build the workflow UI inline
                 workflow = WorkflowRegistry.get(name)
                 workflow.build_ui_content()
+                load_events.extend(getattr(workflow, "_load_events", []))
 
                 workflow_containers[name] = container
                 back_buttons[name] = back_btn
@@ -101,6 +104,10 @@ def create_app() -> gr.Blocks:
             inputs=[current_view],
             outputs=[home_container] + list(workflow_containers.values()),
         )
+
+        # Wire up any dynamic load events from workflows
+        for fn, outputs in load_events:
+            app.load(fn=fn, outputs=outputs)
 
     return app
 
