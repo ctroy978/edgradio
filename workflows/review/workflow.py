@@ -6,6 +6,7 @@ import tempfile
 import gradio as gr
 
 from clients.regrade_mcp_client import RegradeMCPClient, RegradeMCPClientError
+from clients.scrub_mcp_client import ScrubMCPClient
 from workflows.base import BaseWorkflow, WorkflowState, WorkflowStep
 from workflows.registry import WorkflowRegistry
 
@@ -46,6 +47,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
     def build_ui_content(self) -> None:
         regrade_client = RegradeMCPClient()
+        scrub_client = ScrubMCPClient()
 
         # State
         state = gr.State(self.create_initial_state().to_dict())
@@ -126,9 +128,9 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 with gr.Column(visible=False) as panel2:
                     review_header = gr.Markdown("")
 
-                    with gr.Row():
-                        # Left: essay viewer + annotations
-                        with gr.Column(scale=3):
+                    with gr.Tabs():
+                        # Tab 1: Essay & Annotations
+                        with gr.TabItem("Essay & Annotations"):
                             essay_html = gr.HTML(label="Essay Text")
 
                             gr.Markdown("### Add Annotation")
@@ -150,45 +152,55 @@ class TeacherReviewWorkflow(BaseWorkflow):
                                 label="Annotations",
                                 interactive=False,
                             )
-                            delete_annot_input = gr.Textbox(
-                                label="Delete annotation #",
-                                placeholder="Enter # to delete",
-                                scale=1,
-                            )
-                            delete_annot_btn = gr.Button("Delete Annotation", variant="secondary", size="sm")
+                            with gr.Row():
+                                delete_annot_input = gr.Textbox(
+                                    label="Delete annotation #",
+                                    placeholder="Enter # to delete",
+                                    scale=1,
+                                )
+                                delete_annot_btn = gr.Button("Delete Annotation", variant="secondary", scale=1, min_width=80)
 
-                        # Right: AI evaluation + teacher controls
-                        with gr.Column(scale=2):
-                            gr.Markdown("### AI Evaluation")
-                            eval_table = gr.Dataframe(
-                                headers=["Criterion", "AI Score", "AI Feedback"],
-                                label="Criteria Breakdown",
-                                interactive=False,
+                        # Tab 2: Feedback (editable AI evaluation)
+                        with gr.TabItem("Feedback"):
+                            eval_scores_table = gr.Dataframe(
+                                headers=["Criterion", "Score"],
+                                label="Criteria Scores",
+                                interactive=True,
+                                column_count=(2, "fixed"),
                             )
-                            ai_overall = gr.Markdown("")
+                            eval_feedback_text = gr.Textbox(
+                                lines=20,
+                                label="Evaluation Feedback",
+                                placeholder="Criteria feedback will appear here...",
+                            )
+                            with gr.Row():
+                                eval_overall_score = gr.Textbox(
+                                    label="Overall Score",
+                                    scale=1,
+                                )
+                                eval_summary = gr.Textbox(
+                                    lines=3,
+                                    label="Summary",
+                                    scale=3,
+                                )
 
-                            gr.Markdown("### Teacher Overrides")
-                            teacher_grade_input = gr.Textbox(
-                                label="Teacher Grade Override",
-                                placeholder="e.g., B+, 85/100",
-                            )
-                            teacher_comments_input = gr.Textbox(
-                                label="General Comments",
-                                placeholder="Your overall feedback for this student...",
-                                lines=5,
-                            )
+                            with gr.Row():
+                                save_essay_btn = gr.Button("Save", variant="primary")
+                                ai_cleanup_btn = gr.Button("AI Cleanup", variant="secondary")
 
                             with gr.Row():
                                 prev_essay_btn = gr.Button("← Previous")
-                                save_essay_btn = gr.Button("Save", variant="primary")
                                 next_essay_btn = gr.Button("Next →")
 
-                            preview_report_btn = gr.Button("Preview Report", variant="secondary")
-                            report_preview_html = gr.HTML(visible=False)
+                        # Tab 3: Student Report
+                        with gr.TabItem("Student Report"):
+                            gr.Markdown("Click **Generate Preview** to see what the student will receive.")
+                            preview_report_btn = gr.Button("Generate Preview", variant="secondary")
+                            report_preview_html = gr.HTML()
 
-                            with gr.Row():
-                                panel2_back_btn = gr.Button("← Back to Essay List")
-                                finish_reviews_btn = gr.Button("Finish All Reviews →", variant="primary")
+                    with gr.Row():
+                        panel2_back_btn = gr.Button("← Back to Essay List")
+                        finish_reviews_btn = gr.Button("Finish All Reviews →", variant="primary")
 
                 # =============================================================
                 # PANEL 3: Finalize
@@ -384,54 +396,71 @@ class TeacherReviewWorkflow(BaseWorkflow):
         # PANEL 1: Select Essay -> Review
         # =================================================================
         def _normalize_essay_text(raw_text: str) -> str:
-            """Normalize essay text from PDF extraction into readable paragraphs.
+            """Normalize essay text for display.
 
-            Handles: form-feed page joins, word-per-line extraction, and
-            attempts to recover paragraph breaks via sentence-boundary heuristics.
+            Uses line-length heuristics to detect the author's actual
+            paragraph breaks: in PDF-extracted text, the last line of a
+            paragraph is typically shorter than the column width.
             """
             import re
 
-            # Treat form feed characters (page joins) as paragraph breaks
+            # Replace legacy form-feed page joins with double newlines
             text = raw_text.replace('\f', '\n\n')
+            # Normalise 3+ newline runs to exactly \n\n
+            text = re.sub(r'(?:\s*\n){3,}', '\n\n', text)
 
-            # Normalize runs of 2+ newlines to exactly two (paragraph markers)
-            text = re.sub(r'\n{2,}', '\n\n', text)
+            # Split into pages (separated by \n\n) and normalize each
+            pages = text.split('\n\n')
+            normalized: list[str] = []
 
-            # Split into chunks separated by blank lines
-            chunks = text.split('\n\n')
-            paragraphs = []
-            for chunk in chunks:
-                # Within a chunk, join single-newline-separated tokens with spaces
-                joined = ' '.join(chunk.split())
-                if joined:
-                    paragraphs.append(joined)
+            for page in pages:
+                page = page.strip()
+                if not page:
+                    continue
 
-            # If we ended up with only 1 large block, try to recover paragraph
-            # breaks at sentence boundaries followed by a new sentence.
-            if len(paragraphs) <= 2 and any(len(p) > 600 for p in paragraphs):
-                recovered = []
-                for p in paragraphs:
-                    # Split after sentence-ending punctuation followed by a space
-                    # and a capital letter, but not for common abbreviations
-                    parts = re.split(r'(?<=[.!?])\s{2,}(?=[A-Z])', p)
-                    if len(parts) <= 1:
-                        # Try single-space sentence boundaries as fallback
-                        parts = re.split(r'(?<=[.!?])\s(?=[A-Z][a-z])', p)
-                    # Group sentences into paragraphs (~3-5 sentences each)
-                    current = []
-                    sentence_count = 0
-                    for part in parts:
-                        current.append(part)
-                        sentence_count += part.count('.') + part.count('!') + part.count('?')
-                        if sentence_count >= 4:
-                            recovered.append(' '.join(current))
-                            current = []
-                            sentence_count = 0
-                    if current:
-                        recovered.append(' '.join(current))
-                paragraphs = recovered
+                lines = page.split('\n')
+                non_blank = [l for l in lines if l.strip()]
+                if not non_blank:
+                    continue
 
-            return '\n\n'.join(paragraphs)
+                # If lines are already long (pre-normalized text), pass through
+                avg_len = sum(len(l) for l in non_blank) / len(non_blank)
+                if avg_len > 200:
+                    normalized.append(' '.join(page.split()))
+                    continue
+
+                # Line-length heuristic for raw PDF text
+                lengths = [len(l.rstrip()) for l in non_blank if len(l.strip()) > 20]
+                if len(lengths) < 3:
+                    normalized.append(' '.join(page.split()))
+                    continue
+
+                typical = sorted(lengths)[int(len(lengths) * 0.75)]
+                threshold = typical * 0.65
+
+                rebuilt: list[str] = []
+                for i, line in enumerate(lines):
+                    stripped = line.rstrip()
+                    rebuilt.append(stripped)
+                    if i >= len(lines) - 1:
+                        continue
+                    if stripped == '':
+                        rebuilt.append('')
+                        continue
+                    next_line = lines[i + 1].strip()
+                    is_short = (len(stripped.strip()) > 0
+                                and len(stripped.rstrip()) < threshold)
+                    ends_sentence = bool(
+                        re.search(r'[.!?"\'\u201d)]\s*$', stripped))
+                    if is_short and ends_sentence and next_line:
+                        rebuilt.append('')  # paragraph break
+
+                page_text = '\n'.join(rebuilt)
+                page_text = re.sub(r'(?<!\n)\n(?!\n)', ' ', page_text)
+                page_text = re.sub(r' {2,}', ' ', page_text)
+                normalized.append(page_text.strip())
+
+            return '\n\n'.join(normalized)
 
         def _format_essay_html(essay_text: str, annotations: list) -> str:
             """Format essay text as HTML with annotation highlights."""
@@ -453,50 +482,90 @@ class TeacherReviewWorkflow(BaseWorkflow):
                         1,
                     )
 
-            # Convert newlines to paragraphs
+            # Convert newlines to paragraphs (inline styles — Gradio strips <style> tags)
             paragraphs = text.split("\n\n")
             html_parts = []
             for p in paragraphs:
                 p = p.strip()
                 if p:
-                    html_parts.append(f"<p>{p}</p>")
+                    html_parts.append(
+                        f'<p style="margin: 0 0 1em 0; color: #000; line-height: 1.8;">{p}</p>'
+                    )
 
-            return (
-                '<style>'
-                '.essay-viewer { font-family: Georgia, serif !important; font-size: 14px !important; '
-                'color: #000 !important; line-height: 1.8 !important; max-height: 600px; '
-                'overflow-y: auto; padding: 16px; border: 1px solid #ddd; border-radius: 8px; '
-                'background: #fafafa !important; }'
-                '.essay-viewer p { color: #000 !important; margin-bottom: 1em; }'
-                '.essay-viewer mark { background-color: #fff3cd !important; color: #000 !important; '
-                'padding: 2px 4px; }'
-                '</style>'
-                '<div class="essay-viewer">'
+            result_html = (
+                '<div style="font-family: Georgia, serif; font-size: 14px; color: #000; '
+                'line-height: 1.8; max-height: 600px; overflow-y: auto; padding: 16px; '
+                'border: 1px solid #ddd; border-radius: 8px; background: #fafafa;">'
                 + "".join(html_parts)
                 + "</div>"
             )
+            return result_html
 
-        def _build_eval_table(evaluation: dict) -> list:
-            """Build criteria breakdown rows from evaluation JSON."""
-            rows = []
-            criteria = evaluation.get("criteria", []) if isinstance(evaluation, dict) else []
+        def _format_eval_as_editable(evaluation: dict) -> tuple:
+            """Convert evaluation dict into form-friendly editable data.
+
+            Returns (scores_rows, feedback_text, overall, summary).
+            """
+            if not isinstance(evaluation, dict):
+                return [], "", "", ""
+
+            criteria = evaluation.get("criteria", [])
+            scores_rows = []
+            feedback_parts = []
+
             for c in criteria:
+                name = str(c.get("name", ""))
+                score = str(c.get("score", ""))
+                scores_rows.append([name, score])
+
                 feedback = c.get("feedback", {})
-                if isinstance(feedback, dict):
-                    feedback_text = feedback.get("justification", "")
-                elif isinstance(feedback, str):
-                    feedback_text = feedback
-                else:
-                    feedback_text = str(feedback)
-                # Truncate long feedback for table display
-                if len(feedback_text) > 150:
-                    feedback_text = feedback_text[:147] + "..."
-                rows.append([
-                    c.get("name", ""),
-                    str(c.get("score", "")),
-                    feedback_text,
-                ])
-            return rows
+                section_lines = [f"## {name}"]
+
+                if isinstance(feedback, str):
+                    section_lines.append(f"Justification: {feedback}")
+                elif isinstance(feedback, dict):
+                    if feedback.get("justification"):
+                        section_lines.append(f"Justification: {feedback['justification']}")
+                    if feedback.get("advice"):
+                        section_lines.append(f"Advice: {feedback['advice']}")
+                    examples = feedback.get("examples") or []
+                    if examples:
+                        ex_strs = ", ".join(f'"{ex}"' for ex in examples)
+                        section_lines.append(f"Examples: {ex_strs}")
+                    if feedback.get("rewritten_example"):
+                        section_lines.append(f"Suggested revision: {feedback['rewritten_example']}")
+
+                feedback_parts.append("\n".join(section_lines))
+
+            feedback_text = "\n\n".join(feedback_parts)
+            overall = str(evaluation.get("overall_score", ""))
+            summary = str(evaluation.get("summary", ""))
+
+            return scores_rows, feedback_text, overall, summary
+
+        def _serialize_edited_eval(scores_df, feedback_text: str, overall: str, summary: str) -> tuple:
+            """Combine edited form data back for saving via MCP.
+
+            Returns (teacher_grade, teacher_comments).
+            """
+            # Extract scores from dataframe
+            criteria_scores = []
+            if scores_df is not None:
+                rows = scores_df.values.tolist() if hasattr(scores_df, 'values') else scores_df
+                for row in rows:
+                    if len(row) >= 2:
+                        criteria_scores.append({"name": str(row[0]), "score": str(row[1])})
+
+            teacher_comments = json.dumps({
+                "edited_evaluation": {
+                    "criteria_scores": criteria_scores,
+                    "feedback": feedback_text or "",
+                    "overall_score": overall or "",
+                    "summary": summary or "",
+                }
+            })
+
+            return overall or "", teacher_comments
 
         async def _load_essay_into_review(state: WorkflowState, essay_id: int):
             """Load essay detail and return all review panel component values."""
@@ -526,8 +595,23 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     annotations = []
             state.data["current_annotations"] = annotations
 
+            # Fetch original scrubbed text from scrub DB for display
+            # (preserves paragraph formatting better than regrade copy)
+            essay_text = ""
+            info = identity_map.get(sid, {})
+            scrub_doc_id = info.get("scrub_doc_id")
+            if scrub_doc_id:
+                try:
+                    scrub_result = await scrub_client.get_scrubbed_document(int(scrub_doc_id))
+                    scrub_doc = scrub_result.get("document", {})
+                    essay_text = scrub_doc.get("scrubbed_text", "")
+                except Exception:
+                    pass  # fall back to regrade copy
+            if not essay_text:
+                essay_text = essay.get("essay_text") or ""
+            state.data["current_essay_text"] = essay_text
+
             # Essay HTML
-            essay_text = essay.get("essay_text") or ""
             if not essay_text:
                 html_content = (
                     '<div style="padding: 16px; border: 1px solid #ddd; border-radius: 8px; '
@@ -544,18 +628,30 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 for i, a in enumerate(annotations)
             ]
 
-            # Evaluation table
-            evaluation = essay.get("evaluation") or {}
-            eval_rows = _build_eval_table(evaluation)
+            # Evaluation - check for previously saved edited eval
+            teacher_comments_raw = essay.get("teacher_comments") or ""
+            saved_edited = None
+            if teacher_comments_raw:
+                try:
+                    parsed = json.loads(teacher_comments_raw)
+                    if isinstance(parsed, dict) and "edited_evaluation" in parsed:
+                        saved_edited = parsed["edited_evaluation"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-            # AI overall
-            overall_score = evaluation.get("overall_score", "") if isinstance(evaluation, dict) else ""
-            summary = evaluation.get("summary", "") if isinstance(evaluation, dict) else ""
-            ai_text = f"**Overall AI Score:** {overall_score}\n\n{summary}" if overall_score else ""
-
-            # Teacher fields
-            teacher_grade = essay.get("teacher_grade") or ""
-            teacher_comments = essay.get("teacher_comments") or ""
+            if saved_edited:
+                # Restore from previously saved edits
+                scores_rows = [
+                    [s["name"], s["score"]]
+                    for s in saved_edited.get("criteria_scores", [])
+                ]
+                feedback_text = saved_edited.get("feedback", "")
+                overall_score = saved_edited.get("overall_score", "")
+                summary = saved_edited.get("summary", "")
+            else:
+                # Format from AI evaluation
+                evaluation = essay.get("evaluation") or {}
+                scores_rows, feedback_text, overall_score, summary = _format_eval_as_editable(evaluation)
 
             # Header
             essay_ids = state.data.get("essay_ids", [])
@@ -566,47 +662,43 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 header,
                 html_content,
                 annot_rows,
-                eval_rows,
-                ai_text,
-                teacher_grade,
-                teacher_comments,
+                scores_rows,
+                feedback_text,
+                overall_score,
+                summary,
             )
 
         async def handle_select_essay(state_dict, essay_id_val):
             state = WorkflowState.from_dict(state_dict)
 
+            empty_result = lambda msg, panel: (
+                state.to_dict(),
+                self._render_progress(state),
+                msg,
+                "",  # review_header
+                "",  # essay_html
+                "",  # annot_quote
+                "",  # annot_note
+                [],  # annotations_table
+                [],  # eval_scores_table
+                "",  # eval_feedback_text
+                "",  # eval_overall_score
+                "",  # eval_summary
+                *update_panels(panel).values(),
+            )
+
             if not essay_id_val or not str(essay_id_val).strip():
-                return (
-                    state.to_dict(),
-                    self._render_progress(state),
-                    "❌ Please enter an Essay ID",
-                    "",  # review_header
-                    "",  # essay_html
-                    "",  # annot_quote
-                    "",  # annot_note
-                    [],  # annotations_table
-                    [],  # eval_table
-                    "",  # ai_overall
-                    "",  # teacher_grade_input
-                    "",  # teacher_comments_input
-                    *update_panels(1).values(),
-                )
+                return empty_result("❌ Please enter an Essay ID", 1)
 
             try:
                 essay_id = int(str(essay_id_val).strip())
             except ValueError:
-                return (
-                    state.to_dict(),
-                    self._render_progress(state),
-                    "❌ Essay ID must be a number",
-                    "", "", "", "", [], [], "", "", "",
-                    *update_panels(1).values(),
-                )
+                return empty_result("❌ Essay ID must be a number", 1)
 
             try:
                 (
-                    header, html_content, annot_rows, eval_rows,
-                    ai_text, teacher_grade, teacher_comments,
+                    header, html_content, annot_rows, scores_rows,
+                    feedback_text, overall_score, summary,
                 ) = await _load_essay_into_review(state, essay_id)
 
                 state.mark_step_complete(1)
@@ -621,21 +713,15 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     "",  # clear annot_quote
                     "",  # clear annot_note
                     annot_rows,
-                    eval_rows,
-                    ai_text,
-                    teacher_grade,
-                    teacher_comments,
+                    scores_rows,
+                    feedback_text,
+                    overall_score,
+                    summary,
                     *update_panels(2).values(),
                 )
 
             except RegradeMCPClientError as e:
-                return (
-                    state.to_dict(),
-                    self._render_progress(state),
-                    f"❌ Error loading essay: {e}",
-                    "", "", "", "", [], [], "", "", "",
-                    *update_panels(1).values(),
-                )
+                return empty_result(f"❌ Error loading essay: {e}", 1)
 
         self._wrap_button_click(
             select_essay_btn,
@@ -645,8 +731,8 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 state, progress_display, status_msg,
                 review_header, essay_html,
                 annot_quote, annot_note,
-                annotations_table, eval_table, ai_overall,
-                teacher_grade_input, teacher_comments_input,
+                annotations_table, eval_scores_table, eval_feedback_text,
+                eval_overall_score, eval_summary,
                 *panel_outputs,
             ],
             action_status=action_status,
@@ -679,8 +765,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
             state.data["current_annotations"] = annotations
 
             # Rebuild HTML with new annotations
-            essay = state.data.get("current_essay", {})
-            essay_text = essay.get("essay_text", "")
+            essay_text = state.data.get("current_essay_text", "")
             html_content = _format_essay_html(essay_text, annotations)
 
             annot_rows = [
@@ -718,8 +803,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
             except (ValueError, TypeError):
                 pass
 
-            essay = state.data.get("current_essay", {})
-            essay_text = essay.get("essay_text", "")
+            essay_text = state.data.get("current_essay_text", "")
             html_content = _format_essay_html(essay_text, annotations)
 
             annot_rows = [
@@ -738,7 +822,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
         # =================================================================
         # PANEL 2: Save Review
         # =================================================================
-        async def _save_current_review(state: WorkflowState, teacher_grade_val: str, teacher_comments_val: str):
+        async def _save_current_review(state: WorkflowState, scores_df, feedback_text: str, overall: str, summary: str):
             """Save the current essay review via MCP. Returns status message."""
             essay_id = state.data.get("current_essay_id")
             if not essay_id:
@@ -747,12 +831,16 @@ class TeacherReviewWorkflow(BaseWorkflow):
             annotations = state.data.get("current_annotations", [])
             annotations_json = json.dumps(annotations) if annotations else ""
 
+            teacher_grade, teacher_comments = _serialize_edited_eval(
+                scores_df, feedback_text, overall, summary
+            )
+
             try:
                 await regrade_client.update_essay_review(
                     job_id=state.job_id,
                     essay_id=int(essay_id),
-                    teacher_grade=teacher_grade_val or "",
-                    teacher_comments=teacher_comments_val or "",
+                    teacher_grade=teacher_grade,
+                    teacher_comments=teacher_comments,
                     teacher_annotations=annotations_json,
                     status="REVIEWED",
                 )
@@ -760,29 +848,78 @@ class TeacherReviewWorkflow(BaseWorkflow):
             except RegradeMCPClientError as e:
                 return f"❌ Save failed: {e}"
 
-        async def handle_save(state_dict, teacher_grade_val, teacher_comments_val):
+        async def handle_save(state_dict, scores_df, feedback_text, overall, summary):
             state = WorkflowState.from_dict(state_dict)
-            msg = await _save_current_review(state, teacher_grade_val, teacher_comments_val)
+            msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
             return state.to_dict(), msg
+
+        save_inputs = [state, eval_scores_table, eval_feedback_text, eval_overall_score, eval_summary]
 
         self._wrap_button_click(
             save_essay_btn,
             handle_save,
-            inputs=[state, teacher_grade_input, teacher_comments_input],
+            inputs=save_inputs,
             outputs=[state, status_msg],
             action_status=action_status,
             action_text="Saving review...",
         )
 
         # =================================================================
+        # PANEL 2: AI Cleanup
+        # =================================================================
+        async def handle_ai_cleanup(state_dict, scores_df, feedback_text, overall, summary):
+            state = WorkflowState.from_dict(state_dict)
+            essay_id = state.data.get("current_essay_id")
+
+            if not essay_id:
+                return state.to_dict(), "No essay selected", [], "", "", ""
+
+            # Save current edits first
+            save_msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
+            if save_msg.startswith("❌"):
+                return state.to_dict(), save_msg, gr.update(), gr.update(), gr.update(), gr.update()
+
+            try:
+                # Call AI refinement
+                await regrade_client.refine_essay_comments(
+                    job_id=state.job_id, essay_ids=[int(essay_id)]
+                )
+
+                # Reload essay to get refined text
+                (
+                    _header, _html, _annot, scores_rows,
+                    feedback_text_new, overall_score, summary_new,
+                ) = await _load_essay_into_review(state, int(essay_id))
+
+                return (
+                    state.to_dict(),
+                    "✅ AI cleanup complete",
+                    scores_rows,
+                    feedback_text_new,
+                    overall_score,
+                    summary_new,
+                )
+            except RegradeMCPClientError as e:
+                return state.to_dict(), f"❌ AI cleanup failed: {e}", gr.update(), gr.update(), gr.update(), gr.update()
+
+        self._wrap_button_click(
+            ai_cleanup_btn,
+            handle_ai_cleanup,
+            inputs=save_inputs,
+            outputs=[state, status_msg, eval_scores_table, eval_feedback_text, eval_overall_score, eval_summary],
+            action_status=action_status,
+            action_text="Running AI cleanup...",
+        )
+
+        # =================================================================
         # PANEL 2: Previous / Next Essay (auto-save)
         # =================================================================
-        async def _navigate_essay(state_dict, teacher_grade_val, teacher_comments_val, direction: int):
+        async def _navigate_essay(state_dict, scores_df, feedback_text, overall, summary, direction: int):
             """Navigate to prev/next essay, auto-saving first."""
             state = WorkflowState.from_dict(state_dict)
 
             # Auto-save current
-            save_msg = await _save_current_review(state, teacher_grade_val, teacher_comments_val)
+            save_msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
 
             essay_ids = state.data.get("essay_ids", [])
             current_id = state.data.get("current_essay_id")
@@ -792,7 +929,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     state.to_dict(), self._render_progress(state),
                     "No essays to navigate",
                     gr.update(), gr.update(), gr.update(), gr.update(),
-                    gr.update(), gr.update(), gr.update(), gr.update(),
+                    gr.update(), gr.update(), gr.update(),
                 )
 
             try:
@@ -814,8 +951,8 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
             try:
                 (
-                    header, html_content, annot_rows, eval_rows,
-                    ai_text, teacher_grade, teacher_comments,
+                    header, html_content, annot_rows, scores_rows,
+                    feedback_text_new, overall_score, summary_new,
                 ) = await _load_essay_into_review(state, new_essay_id)
 
                 return (
@@ -825,10 +962,10 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     header,
                     html_content,
                     annot_rows,
-                    eval_rows,
-                    ai_text,
-                    teacher_grade,
-                    teacher_comments,
+                    scores_rows,
+                    feedback_text_new,
+                    overall_score,
+                    summary_new,
                 )
             except RegradeMCPClientError as e:
                 return (
@@ -839,18 +976,18 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     gr.update(), gr.update(), gr.update(),
                 )
 
-        async def handle_prev(state_dict, tg, tc):
-            return await _navigate_essay(state_dict, tg, tc, -1)
+        async def handle_prev(state_dict, sdf, ft, ov, su):
+            return await _navigate_essay(state_dict, sdf, ft, ov, su, -1)
 
-        async def handle_next(state_dict, tg, tc):
-            return await _navigate_essay(state_dict, tg, tc, 1)
+        async def handle_next(state_dict, sdf, ft, ov, su):
+            return await _navigate_essay(state_dict, sdf, ft, ov, su, 1)
 
-        nav_inputs = [state, teacher_grade_input, teacher_comments_input]
+        nav_inputs = [state, eval_scores_table, eval_feedback_text, eval_overall_score, eval_summary]
         nav_outputs = [
             state, progress_display, status_msg,
             review_header, essay_html,
-            annotations_table, eval_table, ai_overall,
-            teacher_grade_input, teacher_comments_input,
+            annotations_table, eval_scores_table, eval_feedback_text,
+            eval_overall_score, eval_summary,
         ]
 
         self._wrap_button_click(
@@ -867,15 +1004,15 @@ class TeacherReviewWorkflow(BaseWorkflow):
         # =================================================================
         # PANEL 2: Preview Report
         # =================================================================
-        async def handle_preview_report(state_dict, teacher_grade_val, teacher_comments_val):
+        async def handle_preview_report(state_dict, scores_df, feedback_text, overall, summary):
             state = WorkflowState.from_dict(state_dict)
             essay_id = state.data.get("current_essay_id")
 
             if not essay_id:
-                return state.to_dict(), "", gr.update(visible=False)
+                return state.to_dict(), "", ""
 
             # Auto-save before preview
-            save_msg = await _save_current_review(state, teacher_grade_val, teacher_comments_val)
+            save_msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
 
             try:
                 report_result = await regrade_client.generate_student_report(
@@ -893,16 +1030,16 @@ class TeacherReviewWorkflow(BaseWorkflow):
                         '</style>'
                         f'<div class="report-preview">{html_content}</div>'
                     )
-                    return state.to_dict(), save_msg, gr.update(value=preview, visible=True)
+                    return state.to_dict(), save_msg, preview
                 else:
-                    return state.to_dict(), "No report content generated", gr.update(visible=False)
+                    return state.to_dict(), "No report content generated", "<p><em>No report content was generated.</em></p>"
             except RegradeMCPClientError as e:
-                return state.to_dict(), f"Report preview failed: {e}", gr.update(visible=False)
+                return state.to_dict(), f"Report preview failed: {e}", f"<p><em>Report preview failed: {e}</em></p>"
 
         self._wrap_button_click(
             preview_report_btn,
             handle_preview_report,
-            inputs=[state, teacher_grade_input, teacher_comments_input],
+            inputs=save_inputs,
             outputs=[state, status_msg, report_preview_html],
             action_status=action_status,
             action_text="Generating report preview...",
@@ -911,11 +1048,11 @@ class TeacherReviewWorkflow(BaseWorkflow):
         # =================================================================
         # PANEL 2: Finish All Reviews → go to finalize
         # =================================================================
-        async def handle_finish_reviews(state_dict, teacher_grade_val, teacher_comments_val):
+        async def handle_finish_reviews(state_dict, scores_df, feedback_text, overall, summary):
             state = WorkflowState.from_dict(state_dict)
 
             # Auto-save current essay
-            save_msg = await _save_current_review(state, teacher_grade_val, teacher_comments_val)
+            save_msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
 
             state.mark_step_complete(2)
             state.current_step = 3
@@ -945,7 +1082,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
         self._wrap_button_click(
             finish_reviews_btn,
             handle_finish_reviews,
-            inputs=[state, teacher_grade_input, teacher_comments_input],
+            inputs=save_inputs,
             outputs=[state, progress_display, status_msg, finalize_summary, *panel_outputs],
             action_status=action_status,
             action_text="Saving and finishing reviews...",
