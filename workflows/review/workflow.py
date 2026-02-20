@@ -160,33 +160,26 @@ class TeacherReviewWorkflow(BaseWorkflow):
                                 )
                                 delete_annot_btn = gr.Button("Delete Annotation", variant="secondary", scale=1, min_width=80)
 
-                        # Tab 2: Feedback (editable AI evaluation)
+                        # Tab 2: Feedback (Score-First Hybrid)
                         with gr.TabItem("Feedback"):
+                            eval_rubric_dashboard = gr.HTML(label="AI Assessment")
                             eval_scores_table = gr.Dataframe(
                                 headers=["Criterion", "Score"],
-                                label="Criteria Scores",
+                                label="Criteria Scores (editable — override AI scores here)",
                                 interactive=True,
                                 column_count=(2, "fixed"),
                             )
-                            eval_feedback_text = gr.Textbox(
-                                lines=20,
-                                label="Evaluation Feedback",
-                                placeholder="Criteria feedback will appear here...",
+                            eval_overall_score = gr.Textbox(
+                                label="Overall Score",
                             )
-                            with gr.Row():
-                                eval_overall_score = gr.Textbox(
-                                    label="Overall Score",
-                                    scale=1,
-                                )
-                                eval_summary = gr.Textbox(
-                                    lines=3,
-                                    label="Summary",
-                                    scale=3,
-                                )
+                            eval_teacher_notes = gr.Textbox(
+                                lines=8,
+                                label="Teacher Notes (free-form)",
+                                placeholder="Add your observations, disagreements, or additional context here...",
+                            )
 
                             with gr.Row():
                                 save_essay_btn = gr.Button("Save", variant="primary")
-                                ai_cleanup_btn = gr.Button("AI Cleanup", variant="secondary")
 
                             with gr.Row():
                                 prev_essay_btn = gr.Button("← Previous")
@@ -501,74 +494,136 @@ class TeacherReviewWorkflow(BaseWorkflow):
             )
             return result_html
 
+        def _build_criterion_dashboard_html(evaluation: dict) -> str:
+            """Build read-only HTML rubric cards from AI evaluation dict.
+
+            Per criterion: name, AI score badge, justification bullet,
+            advice bullet, first example quote as blockquote.
+            Uses inline styles (Gradio strips <style> tags).
+            """
+            import html as html_mod
+
+            if not isinstance(evaluation, dict):
+                return ""
+            criteria = evaluation.get("criteria", [])
+            if not criteria:
+                return ""
+
+            cards = []
+            for c in criteria:
+                name = c.get("name", "")
+                score = str(c.get("score", ""))
+                feedback = c.get("feedback", {})
+
+                if isinstance(feedback, dict):
+                    justification = feedback.get("justification", "")
+                    advice = feedback.get("advice", "")
+                    examples = feedback.get("examples", []) or []
+                elif isinstance(feedback, str):
+                    justification = feedback
+                    advice = ""
+                    examples = []
+                else:
+                    justification = ""
+                    advice = ""
+                    examples = []
+
+                just_html = (
+                    f'<p style="margin: 0 0 4px 0; font-size: 13px; color: #334155;">'
+                    f'• {html_mod.escape(str(justification))}</p>'
+                ) if justification else ""
+
+                advice_html = (
+                    f'<p style="margin: 0 0 4px 0; font-size: 13px; color: #1d4ed8;">'
+                    f'• {html_mod.escape(str(advice))}</p>'
+                ) if advice else ""
+
+                quote_html = ""
+                if examples:
+                    first_quote = str(examples[0])
+                    quote_html = (
+                        f'<blockquote style="margin: 6px 0 0 0; padding: 6px 10px; '
+                        f'border-left: 3px solid #94a3b8; color: #64748b; '
+                        f'font-style: italic; font-size: 12px;">'
+                        f'{html_mod.escape(first_quote)}</blockquote>'
+                    )
+
+                cards.append(
+                    f'<div style="border: 1px solid #e2e8f0; border-radius: 8px; '
+                    f'padding: 12px 14px; margin-bottom: 10px; background: #f8fafc;">'
+                    f'<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">'
+                    f'<span style="font-weight: 600; font-size: 14px; color: #1e293b;">'
+                    f'{html_mod.escape(str(name))}</span>'
+                    f'<span style="background: #3b82f6; color: #fff; font-size: 12px; '
+                    f'font-weight: bold; padding: 2px 8px; border-radius: 12px;">'
+                    f'{html_mod.escape(score)}</span>'
+                    f'</div>'
+                    f'{just_html}{advice_html}{quote_html}'
+                    f'</div>'
+                )
+
+            return (
+                '<div style="margin-bottom: 12px;">'
+                '<p style="font-size: 12px; color: #64748b; margin-bottom: 8px;">'
+                'AI assessment — read-only. Override scores in the table below.</p>'
+                + "".join(cards)
+                + '</div>'
+            )
+
         def _format_eval_as_editable(evaluation: dict) -> tuple:
             """Convert evaluation dict into form-friendly editable data.
 
-            Returns (scores_rows, feedback_text, overall, summary).
+            Returns (rubric_dashboard_html, scores_rows, overall).
             """
             if not isinstance(evaluation, dict):
-                return [], "", "", ""
+                return "", [], ""
+
+            rubric_dashboard_html = _build_criterion_dashboard_html(evaluation)
 
             criteria = evaluation.get("criteria", [])
             scores_rows = []
-            feedback_parts = []
-
             for c in criteria:
                 name = str(c.get("name", ""))
                 score = str(c.get("score", ""))
                 scores_rows.append([name, score])
 
-                feedback = c.get("feedback", {})
-                section_lines = [f"## {name}"]
-
-                if isinstance(feedback, str):
-                    section_lines.append(f"Justification: {feedback}")
-                elif isinstance(feedback, dict):
-                    if feedback.get("justification"):
-                        section_lines.append(f"Justification: {feedback['justification']}")
-                    if feedback.get("advice"):
-                        section_lines.append(f"Advice: {feedback['advice']}")
-                    examples = feedback.get("examples") or []
-                    if examples:
-                        ex_strs = ", ".join(f'"{ex}"' for ex in examples)
-                        section_lines.append(f"Examples: {ex_strs}")
-                    if feedback.get("rewritten_example"):
-                        section_lines.append(f"Suggested revision: {feedback['rewritten_example']}")
-
-                feedback_parts.append("\n".join(section_lines))
-
-            feedback_text = "\n\n".join(feedback_parts)
             overall = str(evaluation.get("overall_score", ""))
-            summary = str(evaluation.get("summary", ""))
 
-            return scores_rows, feedback_text, overall, summary
+            return rubric_dashboard_html, scores_rows, overall
 
-        def _serialize_edited_eval(scores_df, feedback_text: str, overall: str, summary: str) -> tuple:
+        def _serialize_edited_eval(scores_df, overall: str, teacher_notes: str) -> tuple:
             """Combine edited form data back for saving via MCP.
 
             Returns (teacher_grade, teacher_comments).
+            New JSON format:
+              {"teacher_notes": "...", "criteria_overrides": [...],
+               "overall_score": "...", "criteria_justifications": null,
+               "report_generated": false}
             """
-            # Extract scores from dataframe
-            criteria_scores = []
+            criteria_overrides = []
             if scores_df is not None:
                 rows = scores_df.values.tolist() if hasattr(scores_df, 'values') else scores_df
                 for row in rows:
                     if len(row) >= 2:
-                        criteria_scores.append({"name": str(row[0]), "score": str(row[1])})
+                        criteria_overrides.append({"name": str(row[0]), "score": str(row[1])})
 
             teacher_comments = json.dumps({
-                "edited_evaluation": {
-                    "criteria_scores": criteria_scores,
-                    "feedback": feedback_text or "",
-                    "overall_score": overall or "",
-                    "summary": summary or "",
-                }
+                "teacher_notes": teacher_notes or "",
+                "criteria_overrides": criteria_overrides,
+                "overall_score": overall or "",
+                "criteria_justifications": None,
+                "report_generated": False,
             })
 
             return overall or "", teacher_comments
 
         async def _load_essay_into_review(state: WorkflowState, essay_id: int):
-            """Load essay detail and return all review panel component values."""
+            """Load essay detail and return all review panel component values.
+
+            Returns:
+                (header, html_content, annot_rows, rubric_dashboard_html,
+                 scores_rows, overall_score, teacher_notes, report_generated)
+            """
             identity_map = _get_identity_map(state)
 
             detail_result = await regrade_client.get_essay_detail(
@@ -628,30 +683,44 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 for i, a in enumerate(annotations)
             ]
 
-            # Evaluation - check for previously saved edited eval
+            # Build rubric dashboard and AI defaults from the AI evaluation
+            evaluation = essay.get("evaluation") or {}
+            rubric_dashboard_html, ai_scores_rows, ai_overall = _format_eval_as_editable(evaluation)
+
+            # Three-tier loading for teacher_comments
             teacher_comments_raw = essay.get("teacher_comments") or ""
-            saved_edited = None
+            scores_rows = ai_scores_rows
+            overall_score = ai_overall
+            teacher_notes = ""
+            report_generated = False
+
             if teacher_comments_raw:
                 try:
                     parsed = json.loads(teacher_comments_raw)
-                    if isinstance(parsed, dict) and "edited_evaluation" in parsed:
-                        saved_edited = parsed["edited_evaluation"]
+                    if isinstance(parsed, dict):
+                        if "teacher_notes" in parsed:
+                            # Tier 1: new format
+                            teacher_notes = parsed.get("teacher_notes", "")
+                            overrides = parsed.get("criteria_overrides", [])
+                            if overrides:
+                                scores_rows = [[o["name"], o["score"]] for o in overrides]
+                            overall_score = parsed.get("overall_score", ai_overall) or ai_overall
+                            criteria_justifications = parsed.get("criteria_justifications")
+                            report_generated = bool(parsed.get("report_generated") and criteria_justifications)
+                        elif "edited_evaluation" in parsed:
+                            # Tier 2: old format
+                            saved_edited = parsed["edited_evaluation"]
+                            saved_rows = saved_edited.get("criteria_scores", [])
+                            if saved_rows:
+                                scores_rows = [[s["name"], s["score"]] for s in saved_rows]
+                            overall_score = saved_edited.get("overall_score", ai_overall) or ai_overall
+                            teacher_notes = ""
+                        else:
+                            # Unknown JSON dict — treat as legacy plain text
+                            teacher_notes = teacher_comments_raw
                 except (json.JSONDecodeError, TypeError):
-                    pass
-
-            if saved_edited:
-                # Restore from previously saved edits
-                scores_rows = [
-                    [s["name"], s["score"]]
-                    for s in saved_edited.get("criteria_scores", [])
-                ]
-                feedback_text = saved_edited.get("feedback", "")
-                overall_score = saved_edited.get("overall_score", "")
-                summary = saved_edited.get("summary", "")
-            else:
-                # Format from AI evaluation
-                evaluation = essay.get("evaluation") or {}
-                scores_rows, feedback_text, overall_score, summary = _format_eval_as_editable(evaluation)
+                    # Tier 3: plain string / legacy
+                    teacher_notes = teacher_comments_raw
 
             # Header
             essay_ids = state.data.get("essay_ids", [])
@@ -662,10 +731,11 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 header,
                 html_content,
                 annot_rows,
+                rubric_dashboard_html,
                 scores_rows,
-                feedback_text,
                 overall_score,
-                summary,
+                teacher_notes,
+                report_generated,
             )
 
         async def handle_select_essay(state_dict, essay_id_val):
@@ -680,10 +750,10 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 "",  # annot_quote
                 "",  # annot_note
                 [],  # annotations_table
+                "",  # eval_rubric_dashboard
                 [],  # eval_scores_table
-                "",  # eval_feedback_text
                 "",  # eval_overall_score
-                "",  # eval_summary
+                "",  # eval_teacher_notes
                 *update_panels(panel).values(),
             )
 
@@ -697,8 +767,9 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
             try:
                 (
-                    header, html_content, annot_rows, scores_rows,
-                    feedback_text, overall_score, summary,
+                    header, html_content, annot_rows,
+                    rubric_dashboard_html, scores_rows, overall_score,
+                    teacher_notes, report_generated,
                 ) = await _load_essay_into_review(state, essay_id)
 
                 state.mark_step_complete(1)
@@ -713,10 +784,10 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     "",  # clear annot_quote
                     "",  # clear annot_note
                     annot_rows,
+                    rubric_dashboard_html,
                     scores_rows,
-                    feedback_text,
                     overall_score,
-                    summary,
+                    teacher_notes,
                     *update_panels(2).values(),
                 )
 
@@ -731,8 +802,11 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 state, progress_display, status_msg,
                 review_header, essay_html,
                 annot_quote, annot_note,
-                annotations_table, eval_scores_table, eval_feedback_text,
-                eval_overall_score, eval_summary,
+                annotations_table,
+                eval_rubric_dashboard,
+                eval_scores_table,
+                eval_overall_score,
+                eval_teacher_notes,
                 *panel_outputs,
             ],
             action_status=action_status,
@@ -822,7 +896,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
         # =================================================================
         # PANEL 2: Save Review
         # =================================================================
-        async def _save_current_review(state: WorkflowState, scores_df, feedback_text: str, overall: str, summary: str):
+        async def _save_current_review(state: WorkflowState, scores_df, overall: str, teacher_notes: str):
             """Save the current essay review via MCP. Returns status message."""
             essay_id = state.data.get("current_essay_id")
             if not essay_id:
@@ -832,7 +906,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
             annotations_json = json.dumps(annotations) if annotations else ""
 
             teacher_grade, teacher_comments = _serialize_edited_eval(
-                scores_df, feedback_text, overall, summary
+                scores_df, overall, teacher_notes
             )
 
             try:
@@ -848,12 +922,12 @@ class TeacherReviewWorkflow(BaseWorkflow):
             except RegradeMCPClientError as e:
                 return f"❌ Save failed: {e}"
 
-        async def handle_save(state_dict, scores_df, feedback_text, overall, summary):
+        async def handle_save(state_dict, scores_df, overall, teacher_notes):
             state = WorkflowState.from_dict(state_dict)
-            msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
+            msg = await _save_current_review(state, scores_df, overall, teacher_notes)
             return state.to_dict(), msg
 
-        save_inputs = [state, eval_scores_table, eval_feedback_text, eval_overall_score, eval_summary]
+        save_inputs = [state, eval_scores_table, eval_overall_score, eval_teacher_notes]
 
         self._wrap_button_click(
             save_essay_btn,
@@ -865,61 +939,14 @@ class TeacherReviewWorkflow(BaseWorkflow):
         )
 
         # =================================================================
-        # PANEL 2: AI Cleanup
-        # =================================================================
-        async def handle_ai_cleanup(state_dict, scores_df, feedback_text, overall, summary):
-            state = WorkflowState.from_dict(state_dict)
-            essay_id = state.data.get("current_essay_id")
-
-            if not essay_id:
-                return state.to_dict(), "No essay selected", [], "", "", ""
-
-            # Save current edits first
-            save_msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
-            if save_msg.startswith("❌"):
-                return state.to_dict(), save_msg, gr.update(), gr.update(), gr.update(), gr.update()
-
-            try:
-                # Call AI refinement
-                await regrade_client.refine_essay_comments(
-                    job_id=state.job_id, essay_ids=[int(essay_id)]
-                )
-
-                # Reload essay to get refined text
-                (
-                    _header, _html, _annot, scores_rows,
-                    feedback_text_new, overall_score, summary_new,
-                ) = await _load_essay_into_review(state, int(essay_id))
-
-                return (
-                    state.to_dict(),
-                    "✅ AI cleanup complete",
-                    scores_rows,
-                    feedback_text_new,
-                    overall_score,
-                    summary_new,
-                )
-            except RegradeMCPClientError as e:
-                return state.to_dict(), f"❌ AI cleanup failed: {e}", gr.update(), gr.update(), gr.update(), gr.update()
-
-        self._wrap_button_click(
-            ai_cleanup_btn,
-            handle_ai_cleanup,
-            inputs=save_inputs,
-            outputs=[state, status_msg, eval_scores_table, eval_feedback_text, eval_overall_score, eval_summary],
-            action_status=action_status,
-            action_text="Running AI cleanup...",
-        )
-
-        # =================================================================
         # PANEL 2: Previous / Next Essay (auto-save)
         # =================================================================
-        async def _navigate_essay(state_dict, scores_df, feedback_text, overall, summary, direction: int):
+        async def _navigate_essay(state_dict, scores_df, overall, teacher_notes, direction: int):
             """Navigate to prev/next essay, auto-saving first."""
             state = WorkflowState.from_dict(state_dict)
 
             # Auto-save current
-            save_msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
+            save_msg = await _save_current_review(state, scores_df, overall, teacher_notes)
 
             essay_ids = state.data.get("essay_ids", [])
             current_id = state.data.get("current_essay_id")
@@ -928,8 +955,9 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 return (
                     state.to_dict(), self._render_progress(state),
                     "No essays to navigate",
-                    gr.update(), gr.update(), gr.update(), gr.update(),
                     gr.update(), gr.update(), gr.update(),
+                    gr.update(), gr.update(), gr.update(), gr.update(),
+                    gr.update(),
                 )
 
             try:
@@ -951,8 +979,9 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
             try:
                 (
-                    header, html_content, annot_rows, scores_rows,
-                    feedback_text_new, overall_score, summary_new,
+                    header, html_content, annot_rows,
+                    rubric_dashboard_html, scores_rows, overall_score,
+                    teacher_notes_new, report_generated,
                 ) = await _load_essay_into_review(state, new_essay_id)
 
                 return (
@@ -962,32 +991,35 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     header,
                     html_content,
                     annot_rows,
+                    rubric_dashboard_html,
                     scores_rows,
-                    feedback_text_new,
                     overall_score,
-                    summary_new,
+                    teacher_notes_new,
                 )
             except RegradeMCPClientError as e:
                 return (
                     state.to_dict(),
                     self._render_progress(state),
                     f"❌ Error: {e}",
-                    gr.update(), gr.update(), gr.update(), gr.update(),
                     gr.update(), gr.update(), gr.update(),
+                    gr.update(), gr.update(), gr.update(), gr.update(),
                 )
 
-        async def handle_prev(state_dict, sdf, ft, ov, su):
-            return await _navigate_essay(state_dict, sdf, ft, ov, su, -1)
+        async def handle_prev(state_dict, sdf, ov, tn):
+            return await _navigate_essay(state_dict, sdf, ov, tn, -1)
 
-        async def handle_next(state_dict, sdf, ft, ov, su):
-            return await _navigate_essay(state_dict, sdf, ft, ov, su, 1)
+        async def handle_next(state_dict, sdf, ov, tn):
+            return await _navigate_essay(state_dict, sdf, ov, tn, 1)
 
-        nav_inputs = [state, eval_scores_table, eval_feedback_text, eval_overall_score, eval_summary]
+        nav_inputs = [state, eval_scores_table, eval_overall_score, eval_teacher_notes]
         nav_outputs = [
             state, progress_display, status_msg,
             review_header, essay_html,
-            annotations_table, eval_scores_table, eval_feedback_text,
-            eval_overall_score, eval_summary,
+            annotations_table,
+            eval_rubric_dashboard,
+            eval_scores_table,
+            eval_overall_score,
+            eval_teacher_notes,
         ]
 
         self._wrap_button_click(
@@ -1004,7 +1036,12 @@ class TeacherReviewWorkflow(BaseWorkflow):
         # =================================================================
         # PANEL 2: Preview Report
         # =================================================================
-        async def handle_preview_report(state_dict, scores_df, feedback_text, overall, summary):
+        async def handle_preview_report(state_dict, scores_df, overall, teacher_notes):
+            """Generate a preview of the student report.
+
+            Always synthesizes teacher input via AI first so the preview reflects
+            the teacher's overrides and notes as seamless prose (not a separate box).
+            """
             state = WorkflowState.from_dict(state_dict)
             essay_id = state.data.get("current_essay_id")
 
@@ -1012,15 +1049,55 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 return state.to_dict(), "", ""
 
             # Auto-save before preview
-            save_msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
+            save_msg = await _save_current_review(state, scores_df, overall, teacher_notes)
+            if save_msg.startswith("❌"):
+                return state.to_dict(), save_msg, ""
+
+            # Extract criteria_overrides for the synthesis call
+            criteria_overrides = []
+            if scores_df is not None:
+                rows = scores_df.values.tolist() if hasattr(scores_df, 'values') else scores_df
+                for row in rows:
+                    if len(row) >= 2:
+                        criteria_overrides.append({"name": str(row[0]), "score": str(row[1])})
+            criteria_overrides_json = json.dumps(criteria_overrides) if criteria_overrides else ""
 
             try:
+                # Always (re-)synthesize so the preview reflects current teacher input
+                merged_result = await regrade_client.generate_merged_report(
+                    job_id=state.job_id,
+                    essay_id=int(essay_id),
+                    teacher_notes=teacher_notes or "",
+                    criteria_overrides=criteria_overrides_json,
+                )
+
+                if merged_result.get("status") != "success":
+                    err = merged_result.get("message", "Unknown error")
+                    return state.to_dict(), f"❌ Report synthesis failed: {err}", ""
+
+                criteria_justifications = merged_result.get("criteria_justifications", [])
+
+                # Persist the blended justifications so generate_student_report picks them up
+                _, teacher_comments_json = _serialize_edited_eval(scores_df, overall, teacher_notes)
+                try:
+                    current_data = json.loads(teacher_comments_json)
+                except (json.JSONDecodeError, TypeError):
+                    current_data = {}
+                current_data["criteria_justifications"] = criteria_justifications
+                current_data["report_generated"] = True
+
+                await regrade_client.update_essay_review(
+                    job_id=state.job_id,
+                    essay_id=int(essay_id),
+                    teacher_comments=json.dumps(current_data),
+                )
+
+                # Now render the full student HTML report (rubric + prose + essay)
                 report_result = await regrade_client.generate_student_report(
                     job_id=state.job_id, essay_id=int(essay_id)
                 )
                 html_content = report_result.get("html", report_result.get("report", ""))
                 if html_content:
-                    # Wrap in a styled container to ensure readability
                     preview = (
                         '<style>'
                         '.report-preview { color: #000 !important; padding: 16px; '
@@ -1030,11 +1107,11 @@ class TeacherReviewWorkflow(BaseWorkflow):
                         '</style>'
                         f'<div class="report-preview">{html_content}</div>'
                     )
-                    return state.to_dict(), save_msg, preview
+                    return state.to_dict(), "✅ Preview generated", preview
                 else:
                     return state.to_dict(), "No report content generated", "<p><em>No report content was generated.</em></p>"
             except RegradeMCPClientError as e:
-                return state.to_dict(), f"Report preview failed: {e}", f"<p><em>Report preview failed: {e}</em></p>"
+                return state.to_dict(), f"❌ Preview failed: {e}", f"<p><em>Preview failed: {e}</em></p>"
 
         self._wrap_button_click(
             preview_report_btn,
@@ -1048,23 +1125,22 @@ class TeacherReviewWorkflow(BaseWorkflow):
         # =================================================================
         # PANEL 2: Finish All Reviews → go to finalize
         # =================================================================
-        async def handle_finish_reviews(state_dict, scores_df, feedback_text, overall, summary):
+        async def handle_finish_reviews(state_dict, scores_df, overall, teacher_notes):
             state = WorkflowState.from_dict(state_dict)
 
             # Auto-save current essay
-            save_msg = await _save_current_review(state, scores_df, feedback_text, overall, summary)
+            save_msg = await _save_current_review(state, scores_df, overall, teacher_notes)
 
             state.mark_step_complete(2)
             state.current_step = 3
 
             # Build finalize summary
             essays = state.data.get("essays", [])
-            identity_map = _get_identity_map(state)
             reviewed = sum(1 for e in essays if e.get("status") in ("REVIEWED", "APPROVED"))
             total = len(essays)
 
             job = state.data.get("job", {})
-            summary = (
+            fin_summary = (
                 f"### Finalize: {job.get('name', state.job_id)}\n\n"
                 f"- **Total essays:** {total}\n"
                 f"- **Reviewed:** {reviewed}\n"
@@ -1075,7 +1151,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 state.to_dict(),
                 self._render_progress(state),
                 save_msg,
-                summary,
+                fin_summary,
                 *update_panels(3).values(),
             )
 
@@ -1150,7 +1226,6 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
             # Build finalize summary
             essays = state.data.get("essays", [])
-            identity_map = _get_identity_map(state)
             reviewed = sum(1 for e in essays if e.get("status") in ("REVIEWED", "APPROVED"))
             total = len(essays)
 

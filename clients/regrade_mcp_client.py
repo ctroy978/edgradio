@@ -316,3 +316,32 @@ class RegradeMCPClient:
         return await self.call_tool(
             "generate_student_report", job_id=job_id, essay_id=essay_id
         )
+
+    async def generate_merged_report(
+        self,
+        job_id: str,
+        essay_id: int,
+        teacher_notes: str = "",
+        criteria_overrides: str = "",
+        model: str = "",
+    ) -> dict:
+        """Synthesize AI evaluation + teacher overrides + notes into a polished report.
+
+        Args:
+            job_id: The regrade job ID
+            essay_id: The essay ID
+            teacher_notes: Free-form teacher notes (authoritative)
+            criteria_overrides: JSON string of [{"name": ..., "score": ...}] overrides
+            model: Optional AI model override
+
+        Returns:
+            Result with {"status": "success", "report": "prose text", "essay_id": ...}
+        """
+        kwargs: dict[str, Any] = {"job_id": job_id, "essay_id": essay_id}
+        if teacher_notes:
+            kwargs["teacher_notes"] = teacher_notes
+        if criteria_overrides:
+            kwargs["criteria_overrides"] = criteria_overrides
+        if model:
+            kwargs["model"] = model
+        return await self.call_tool("generate_merged_report", **kwargs)
