@@ -200,14 +200,13 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 # =============================================================
                 with gr.Column(visible=False) as panel3:
                     gr.Markdown("## Finalize Job")
-                    gr.Markdown("Finalize the job to lock in grades and generate student reports.")
+                    gr.Markdown(
+                        "Finalize the job to lock in grades and generate student reports. "
+                        "Reports will use the preview you generated for each essay — "
+                        "essays without a generated preview will use the AI evaluation only."
+                    )
 
                     finalize_summary = gr.Markdown("")
-
-                    refine_checkbox = gr.Checkbox(
-                        label="Refine comments with AI before finalizing",
-                        value=True,
-                    )
 
                     finalize_btn = gr.Button("Finalize Job", variant="primary")
                     finalize_status = gr.Markdown("")
@@ -404,12 +403,17 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
             # Split into pages (separated by \n\n) and normalize each
             pages = text.split('\n\n')
+
             normalized: list[str] = []
 
             for page in pages:
                 page = page.strip()
                 if not page:
                     continue
+
+                # Collapse space-only blank lines (pypdf word-per-line artifact:
+                # "word\n \nword") to single newlines to avoid fake paragraph breaks.
+                page = re.sub(r'\n([ \t]*\n)+', '\n', page)
 
                 lines = page.split('\n')
                 non_blank = [l for l in lines if l.strip()]
@@ -591,14 +595,23 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
             return rubric_dashboard_html, scores_rows, overall
 
-        def _serialize_edited_eval(scores_df, overall: str, teacher_notes: str) -> tuple:
+        def _serialize_edited_eval(
+            scores_df,
+            overall: str,
+            teacher_notes: str,
+            criteria_justifications=None,
+            report_generated: bool = False,
+        ) -> tuple:
             """Combine edited form data back for saving via MCP.
 
             Returns (teacher_grade, teacher_comments).
             New JSON format:
               {"teacher_notes": "...", "criteria_overrides": [...],
-               "overall_score": "...", "criteria_justifications": null,
-               "report_generated": false}
+               "overall_score": "...", "criteria_justifications": [...],
+               "report_generated": true/false}
+
+            criteria_justifications and report_generated are passed through from
+            state so that auto-saves don't wipe out a previously generated preview.
             """
             criteria_overrides = []
             if scores_df is not None:
@@ -611,8 +624,8 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 "teacher_notes": teacher_notes or "",
                 "criteria_overrides": criteria_overrides,
                 "overall_score": overall or "",
-                "criteria_justifications": None,
-                "report_generated": False,
+                "criteria_justifications": criteria_justifications,
+                "report_generated": report_generated,
             })
 
             return overall or "", teacher_comments
@@ -694,6 +707,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
             teacher_notes = ""
             report_generated = False
 
+            criteria_justifications = None
             if teacher_comments_raw:
                 try:
                     parsed = json.loads(teacher_comments_raw)
@@ -721,6 +735,10 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 except (json.JSONDecodeError, TypeError):
                     # Tier 3: plain string / legacy
                     teacher_notes = teacher_comments_raw
+
+            # Store preview state in workflow state so saves preserve it
+            state.data["current_report_generated"] = report_generated
+            state.data["current_criteria_justifications"] = criteria_justifications if report_generated else None
 
             # Header
             essay_ids = state.data.get("essay_ids", [])
@@ -905,8 +923,14 @@ class TeacherReviewWorkflow(BaseWorkflow):
             annotations = state.data.get("current_annotations", [])
             annotations_json = json.dumps(annotations) if annotations else ""
 
+            # Preserve any previously generated preview data so saves don't wipe it
+            criteria_justifications = state.data.get("current_criteria_justifications")
+            report_generated = state.data.get("current_report_generated", False)
+
             teacher_grade, teacher_comments = _serialize_edited_eval(
-                scores_df, overall, teacher_notes
+                scores_df, overall, teacher_notes,
+                criteria_justifications=criteria_justifications,
+                report_generated=report_generated,
             )
 
             try:
@@ -1077,20 +1101,23 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
                 criteria_justifications = merged_result.get("criteria_justifications", [])
 
-                # Persist the blended justifications so generate_student_report picks them up
-                _, teacher_comments_json = _serialize_edited_eval(scores_df, overall, teacher_notes)
-                try:
-                    current_data = json.loads(teacher_comments_json)
-                except (json.JSONDecodeError, TypeError):
-                    current_data = {}
-                current_data["criteria_justifications"] = criteria_justifications
-                current_data["report_generated"] = True
+                # Persist the blended justifications so generate_student_report picks them up.
+                # Always use report_generated=True here regardless of prior state.
+                _, teacher_comments_json = _serialize_edited_eval(
+                    scores_df, overall, teacher_notes,
+                    criteria_justifications=criteria_justifications,
+                    report_generated=True,
+                )
 
                 await regrade_client.update_essay_review(
                     job_id=state.job_id,
                     essay_id=int(essay_id),
-                    teacher_comments=json.dumps(current_data),
+                    teacher_comments=teacher_comments_json,
                 )
+
+                # Update workflow state so subsequent saves preserve the preview
+                state.data["current_criteria_justifications"] = criteria_justifications
+                state.data["current_report_generated"] = True
 
                 # Now render the full student HTML report (rubric + prose + essay)
                 report_result = await regrade_client.generate_student_report(
@@ -1121,6 +1148,17 @@ class TeacherReviewWorkflow(BaseWorkflow):
             action_status=action_status,
             action_text="Generating report preview...",
         )
+
+        # Invalidate any previously generated preview when the teacher edits
+        # scores or notes — they'll need to regenerate before finalizing.
+        def _invalidate_preview(state_dict):
+            state = WorkflowState.from_dict(state_dict)
+            state.data["current_report_generated"] = False
+            state.data["current_criteria_justifications"] = None
+            return state.to_dict()
+
+        eval_scores_table.change(fn=_invalidate_preview, inputs=[state], outputs=[state])
+        eval_teacher_notes.change(fn=_invalidate_preview, inputs=[state], outputs=[state])
 
         # =================================================================
         # PANEL 2: Finish All Reviews → go to finalize
@@ -1273,20 +1311,18 @@ class TeacherReviewWorkflow(BaseWorkflow):
         # =================================================================
         # PANEL 3: Finalize Job
         # =================================================================
-        async def handle_finalize(state_dict, refine_val):
+        async def handle_finalize(state_dict):
             state = WorkflowState.from_dict(state_dict)
 
             try:
-                # Finalize
+                # Finalize without AI refinement — the teacher's generated preview
+                # is the authoritative content; we never re-run AI over it.
                 result = await regrade_client.finalize_job(
                     job_id=state.job_id,
-                    refine_comments=refine_val,
+                    refine_comments=False,
                 )
 
-                finalize_msg = f"✅ Job finalized"
-                if result.get("refinement"):
-                    refined = result["refinement"].get("refined_count", 0)
-                    finalize_msg += f" ({refined} comments refined by AI)"
+                finalize_msg = "✅ Job finalized"
 
                 # Generate reports
                 essay_ids = state.data.get("essay_ids", [])
@@ -1347,7 +1383,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
         self._wrap_button_click(
             finalize_btn,
             handle_finalize,
-            inputs=[state, refine_checkbox],
+            inputs=[state],
             outputs=[state, progress_display, status_msg, finalize_status, report_files],
             action_status=action_status,
             action_text="Finalizing job and generating reports (this may take a few minutes)...",
