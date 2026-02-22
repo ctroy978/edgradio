@@ -2,14 +2,10 @@
 
 import base64
 import json
-from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-
 from app.config import settings
+from clients.base_mcp_client import BaseMCPClient
 
 
 class BubbleMCPClientError(Exception):
@@ -18,72 +14,11 @@ class BubbleMCPClientError(Exception):
     pass
 
 
-@asynccontextmanager
-async def get_bubble_mcp_session():
-    """Create and manage Bubble MCP client session via stdio.
-
-    Yields:
-        ClientSession: Active MCP client session
-    """
-    server_path = settings.bubble_mcp_server_path
-    if not server_path:
-        raise BubbleMCPClientError("BUBBLE_MCP_SERVER_PATH not configured")
-
-    server_path = Path(server_path).expanduser()
-    if not server_path.exists():
-        raise BubbleMCPClientError(f"Bubble MCP server script not found: {server_path}")
-
-    server_dir = server_path.parent
-
-    server_params = StdioServerParameters(
-        command="uv",
-        args=["run", "python", str(server_path)],
-        cwd=str(server_dir),
-        env=None,
-    )
-
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
-
-
-class BubbleMCPClient:
+class BubbleMCPClient(BaseMCPClient):
     """High-level MCP client for calling edmcp-bubble server tools."""
 
     def __init__(self):
-        self._tools_cache: dict[str, dict] | None = None
-
-    async def call_tool(self, tool_name: str, **kwargs) -> dict[str, Any]:
-        """Call an MCP tool and return the parsed result.
-
-        Args:
-            tool_name: Name of the tool to call
-            **kwargs: Tool arguments
-
-        Returns:
-            Parsed JSON result from the tool
-
-        Raises:
-            BubbleMCPClientError: If tool call fails
-        """
-        async with get_bubble_mcp_session() as session:
-            try:
-                result = await session.call_tool(tool_name, arguments=kwargs)
-
-                if result.content:
-                    text_content = "\n".join(
-                        item.text for item in result.content if hasattr(item, "text")
-                    )
-                    try:
-                        return json.loads(text_content)
-                    except json.JSONDecodeError:
-                        return {"raw_text": text_content}
-
-                return {"status": "success", "message": "Tool executed (no output)"}
-
-            except Exception as e:
-                raise BubbleMCPClientError(f"Tool call failed: {tool_name} - {e}") from e
+        super().__init__(settings.bubble_mcp_server_path, BubbleMCPClientError)
 
     # =========================================================================
     # Test Management
@@ -127,7 +62,7 @@ class BubbleMCPClient:
         Returns:
             Result with tests list, total count, pagination info
         """
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "limit": limit,
             "offset": offset,
             "include_archived": include_archived,

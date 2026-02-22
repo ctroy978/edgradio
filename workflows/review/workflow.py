@@ -1112,23 +1112,14 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
                 criteria_justifications = merged_result.get("criteria_justifications", [])
 
-                # Persist the blended justifications so generate_student_report picks them up.
-                # Always use report_generated=True here regardless of prior state.
-                _, teacher_comments_json = _serialize_edited_eval(
-                    scores_df, overall, teacher_notes,
-                    criteria_justifications=criteria_justifications,
-                    report_generated=True,
-                )
-
-                await regrade_client.update_essay_review(
-                    job_id=state.job_id,
-                    essay_id=int(essay_id),
-                    teacher_comments=teacher_comments_json,
-                )
-
-                # Update workflow state so subsequent saves preserve the preview
+                # Update state with synthesis results, then do a full save via the
+                # standard path — symmetric with the pre-synthesis save above.
                 state.data["current_criteria_justifications"] = criteria_justifications
                 state.data["current_report_generated"] = True
+
+                save_msg2 = await _save_current_review(state, scores_df, overall, teacher_notes)
+                if save_msg2.startswith("❌"):
+                    return state.to_dict(), save_msg2, ""
 
                 # Now render the full student HTML report (rubric + prose + essay)
                 report_result = await regrade_client.generate_student_report(

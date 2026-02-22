@@ -1,15 +1,7 @@
 """MCP Client - Connects to FastMCP server via stdio."""
 
-import json
-import os
-from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Any
-
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-
 from app.config import settings
+from clients.base_mcp_client import BaseMCPClient
 
 
 class MCPClientError(Exception):
@@ -18,42 +10,11 @@ class MCPClientError(Exception):
     pass
 
 
-@asynccontextmanager
-async def get_mcp_session():
-    """Create and manage MCP client session via stdio.
-
-    Yields:
-        ClientSession: Active MCP client session
-    """
-    server_path = settings.mcp_server_path
-    if not server_path:
-        raise MCPClientError("MCP_SERVER_PATH not configured")
-
-    server_path = Path(server_path).expanduser()
-    if not server_path.exists():
-        raise MCPClientError(f"MCP server script not found: {server_path}")
-
-    # Use uv to run the server (consistent with edmcp setup)
-    server_dir = server_path.parent
-
-    server_params = StdioServerParameters(
-        command="uv",
-        args=["run", "python", str(server_path)],
-        cwd=str(server_dir),
-        env=None,
-    )
-
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
-
-
-class MCPClient:
+class MCPClient(BaseMCPClient):
     """High-level MCP client for calling edmcp server tools."""
 
     def __init__(self):
-        self._tools_cache: dict[str, dict] | None = None
+        super().__init__(settings.mcp_server_path, MCPClientError)
 
     async def list_tools(self) -> list[dict]:
         """List all available tools from the MCP server.
@@ -61,49 +22,23 @@ class MCPClient:
         Returns:
             List of tool definitions with name, description, and inputSchema
         """
-        async with get_mcp_session() as session:
-            result = await session.list_tools()
-            return [
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": tool.inputSchema,
-                }
-                for tool in result.tools
-            ]
-
-    async def call_tool(self, tool_name: str, **kwargs) -> dict[str, Any]:
-        """Call an MCP tool and return the parsed result.
-
-        Args:
-            tool_name: Name of the tool to call
-            **kwargs: Tool arguments
-
-        Returns:
-            Parsed JSON result from the tool
-
-        Raises:
-            MCPClientError: If tool call fails
-        """
-        async with get_mcp_session() as session:
+        for attempt in range(2):
             try:
-                result = await session.call_tool(tool_name, arguments=kwargs)
-
-                # Extract text content from result
-                if result.content:
-                    text_content = "\n".join(
-                        item.text for item in result.content if hasattr(item, "text")
-                    )
-                    # Try to parse as JSON
-                    try:
-                        return json.loads(text_content)
-                    except json.JSONDecodeError:
-                        return {"raw_text": text_content}
-
-                return {"status": "success", "message": "Tool executed (no output)"}
-
+                session = await self._ensure_session()
+                result = await session.list_tools()
+                return [
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "inputSchema": tool.inputSchema,
+                    }
+                    for tool in result.tools
+                ]
             except Exception as e:
-                raise MCPClientError(f"Tool call failed: {tool_name} - {e}") from e
+                if attempt == 0:
+                    await self._reset()
+                    continue
+                raise MCPClientError(f"list_tools failed: {e}") from e
 
     # =========================================================================
     # Convenience methods for common edmcp operations
