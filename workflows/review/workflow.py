@@ -1171,6 +1171,31 @@ class TeacherReviewWorkflow(BaseWorkflow):
         eval_scores_table.change(fn=_invalidate_preview, inputs=[state], outputs=[state])
         eval_teacher_notes.change(fn=_invalidate_preview, inputs=[state], outputs=[state])
 
+        def _recalculate_overall_score(scores_df):
+            """Auto-sum criterion scores into the overall score field."""
+            if scores_df is None:
+                return gr.update()
+            rows = scores_df.values.tolist() if hasattr(scores_df, 'values') else scores_df
+            total = 0.0
+            for row in rows:
+                if len(row) >= 2:
+                    try:
+                        score_str = str(row[1]).strip()
+                        # Handle "x/y" format — take the numerator
+                        if '/' in score_str:
+                            score_str = score_str.split('/')[0].strip()
+                        total += float(score_str)
+                    except (ValueError, TypeError):
+                        return gr.update()  # non-numeric score — don't overwrite
+            result = int(total) if total == int(total) else total
+            return str(result)
+
+        eval_scores_table.change(
+            fn=_recalculate_overall_score,
+            inputs=[eval_scores_table],
+            outputs=[eval_overall_score],
+        )
+
         # =================================================================
         # PANEL 2: Finish All Reviews → go to finalize
         # =================================================================

@@ -80,7 +80,7 @@ class DocumentScrubWorkflow(BaseWorkflow):
                     gr.Markdown("Upload PDF documents for PII scrubbing.")
 
                     batch_name = gr.Textbox(
-                        label="Batch Name (Optional)",
+                        label="Batch Name (Required)",
                         placeholder="e.g., 'WR121 Essays - Fall 2024'",
                     )
 
@@ -258,6 +258,17 @@ class DocumentScrubWorkflow(BaseWorkflow):
             names_rows = []
 
             try:
+                if not batch_name_val or not batch_name_val.strip():
+                    state.mark_step_error("Batch name is required")
+                    return (
+                        state.to_dict(),
+                        self._render_progress(state),
+                        "❌ Please provide a batch name (e.g., 'WR121 Essays - Fall 2024')",
+                        name_status_text,
+                        names_rows,
+                        *update_panels(0).values(),
+                    )
+
                 if not doc_format_val:
                     state.mark_step_error("Please select a document format")
                     return (
@@ -303,6 +314,7 @@ class DocumentScrubWorkflow(BaseWorkflow):
 
                 state.job_id = batch_id
                 state.data["documents_processed"] = docs_processed
+                state.data["batch_name"] = batch_name_val.strip()
                 state.mark_step_complete(0)
                 state.current_step = 1
 

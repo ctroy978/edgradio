@@ -128,14 +128,8 @@ class EssayRegradeWorkflow(BaseWorkflow):
                         placeholder="e.g., 'WR121 Essay 2 - Argumentative'",
                     )
 
-                    rubric_text = gr.Textbox(
-                        label="Rubric (Required)",
-                        placeholder="Enter your rubric text here, or upload a PDF/TXT file below...",
-                        lines=10,
-                    )
-
                     rubric_file = gr.File(
-                        label="Upload Rubric (PDF or TXT)",
+                        label="Upload Rubric (PDF or TXT, Required)",
                         file_types=[".pdf", ".txt"],
                         file_count="single",
                     )
@@ -316,6 +310,7 @@ class EssayRegradeWorkflow(BaseWorkflow):
                     self._render_progress(state),
                     "❌ Please enter a Batch ID from the table above",
                     preview_rows,
+                    "",
                     *update_panels(0).values(),
                 )
 
@@ -332,12 +327,25 @@ class EssayRegradeWorkflow(BaseWorkflow):
                         self._render_progress(state),
                         "❌ No documents found in this batch. Has it been scrubbed?",
                         preview_rows,
+                        "",
                         *update_panels(0).values(),
                     )
+
+                # Look up the batch name to pre-populate the job name
+                batch_name = ""
+                try:
+                    batches_result = await scrub_client.list_batches(include_archived=True)
+                    for b in batches_result.get("batches", []):
+                        if b.get("id", b.get("batch_id", "")) == batch_id_val:
+                            batch_name = b.get("name", "")
+                            break
+                except ScrubMCPClientError:
+                    pass
 
                 # Store batch data in state
                 state.data["batch_id"] = batch_id_val
                 state.data["batch_documents"] = documents
+                state.data["batch_name"] = batch_name
 
                 for doc in documents:
                     # Estimate word count from scrubbed text if available
@@ -358,6 +366,7 @@ class EssayRegradeWorkflow(BaseWorkflow):
                     self._render_progress(state),
                     f"✅ Selected batch `{batch_id_val}` with {len(documents)} documents",
                     preview_rows,
+                    batch_name,
                     *update_panels(1).values(),
                 )
 
@@ -368,6 +377,7 @@ class EssayRegradeWorkflow(BaseWorkflow):
                     self._render_progress(state),
                     f"❌ Error loading batch: {e}",
                     preview_rows,
+                    "",
                     *update_panels(0).values(),
                 )
 
@@ -378,6 +388,7 @@ class EssayRegradeWorkflow(BaseWorkflow):
             outputs=[
                 state, progress_display, status_msg,
                 preview_table,
+                job_name,
                 *panel_outputs,
             ],
             action_status=action_status,
@@ -385,7 +396,7 @@ class EssayRegradeWorkflow(BaseWorkflow):
         )
 
         # --- Step 1: Setup Job ---
-        async def handle_setup_job(state_dict, job_name_val, rubric_text_val, rubric_file_val, essay_question_val, class_name_val, assignment_title_val, due_date_val):
+        async def handle_setup_job(state_dict, job_name_val, rubric_file_val, essay_question_val, class_name_val, assignment_title_val, due_date_val):
             state = WorkflowState.from_dict(state_dict)
             state.mark_step_in_progress(1)
 
@@ -399,33 +410,40 @@ class EssayRegradeWorkflow(BaseWorkflow):
                     *update_panels(1).values(),
                 )
 
-            # Build rubric text - from file upload or text input
-            rubric = rubric_text_val or ""
-
-            if rubric_file_val:
-                try:
-                    file_path = rubric_file_val.name if hasattr(rubric_file_val, 'name') else str(rubric_file_val)
-                    if file_path.lower().endswith(".pdf"):
-                        pdf_result = await mcp_client.convert_pdf_to_text(file_path)
-                        rubric = pdf_result.get("text_content", rubric)
-                    elif file_path.lower().endswith(".txt"):
-                        with open(file_path, "r") as f:
-                            rubric = f.read()
-                except Exception as e:
-                    state.mark_step_error(f"Error reading rubric file: {e}")
-                    return (
-                        state.to_dict(),
-                        self._render_progress(state),
-                        f"❌ Error reading rubric file: {e}",
-                        *update_panels(1).values(),
-                    )
-
-            if not rubric.strip():
-                state.mark_step_error("Rubric is required")
+            if not rubric_file_val:
+                state.mark_step_error("Rubric file is required")
                 return (
                     state.to_dict(),
                     self._render_progress(state),
-                    "❌ Please enter rubric text or upload a rubric file",
+                    "❌ Please upload a rubric file (PDF or TXT)",
+                    *update_panels(1).values(),
+                )
+
+            # Extract rubric text from uploaded file
+            rubric = ""
+            try:
+                file_path = rubric_file_val.name if hasattr(rubric_file_val, 'name') else str(rubric_file_val)
+                if file_path.lower().endswith(".pdf"):
+                    pdf_result = await mcp_client.convert_pdf_to_text(file_path)
+                    rubric = pdf_result.get("text_content", "")
+                elif file_path.lower().endswith(".txt"):
+                    with open(file_path, "r") as f:
+                        rubric = f.read()
+            except Exception as e:
+                state.mark_step_error(f"Error reading rubric file: {e}")
+                return (
+                    state.to_dict(),
+                    self._render_progress(state),
+                    f"❌ Error reading rubric file: {e}",
+                    *update_panels(1).values(),
+                )
+
+            if not rubric.strip():
+                state.mark_step_error("Rubric file appears to be empty")
+                return (
+                    state.to_dict(),
+                    self._render_progress(state),
+                    "❌ Rubric file appears to be empty",
                     *update_panels(1).values(),
                 )
 
@@ -464,7 +482,7 @@ class EssayRegradeWorkflow(BaseWorkflow):
         self._wrap_button_click(
             setup_btn,
             handle_setup_job,
-            inputs=[state, job_name, rubric_text, rubric_file, essay_question, class_name, assignment_title, due_date],
+            inputs=[state, job_name, rubric_file, essay_question, class_name, assignment_title, due_date],
             outputs=[
                 state, progress_display, status_msg,
                 *panel_outputs,
