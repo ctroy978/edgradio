@@ -121,7 +121,7 @@ class RegradeMCPClient:
         """
         return await self.call_tool("get_job", job_id=job_id)
 
-    async def list_jobs(self, status: str | None = None) -> dict:
+    async def list_jobs(self, status: str | None = None, include_archived: bool = False) -> dict:
         """List grading jobs, optionally filtered by status.
 
         Returns:
@@ -130,6 +130,8 @@ class RegradeMCPClient:
         kwargs: dict[str, Any] = {}
         if status:
             kwargs["status"] = status
+        if include_archived:
+            kwargs["include_archived"] = True
         return await self.call_tool("list_jobs", **kwargs)
 
     async def update_job(self, job_id: str, **kwargs) -> dict:

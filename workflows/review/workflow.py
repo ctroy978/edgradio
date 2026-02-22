@@ -77,7 +77,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
                     with gr.Row():
                         status_filter = gr.Dropdown(
-                            choices=["All", "READY_FOR_REVIEW", "IN_PROGRESS", "FINALIZED"],
+                            choices=["All", "READY_FOR_REVIEW", "IN_PROGRESS", "FINALIZED", "ARCHIVED"],
                             value="All",
                             label="Status Filter",
                             scale=1,
@@ -218,6 +218,14 @@ class TeacherReviewWorkflow(BaseWorkflow):
                         interactive=False,
                     )
 
+                    gr.Markdown("---")
+                    gr.Markdown(
+                        "**Archive this job** once reports are distributed. "
+                        "Archived jobs are hidden from the default job list but their data is preserved."
+                    )
+                    archive_job_btn = gr.Button("Archive Job", variant="secondary")
+                    archive_job_status = gr.Markdown("")
+
                     panel3_back_btn = gr.Button("← Back to Essay List")
 
         # =================================================================
@@ -243,8 +251,11 @@ class TeacherReviewWorkflow(BaseWorkflow):
         # =================================================================
         async def handle_load_jobs(state_dict, status_val):
             try:
-                status_filter_val = None if status_val == "All" else status_val
-                result = await regrade_client.list_jobs(status=status_filter_val)
+                include_archived = status_val == "ARCHIVED"
+                status_filter_val = None if status_val in ("All", "ARCHIVED") else status_val
+                result = await regrade_client.list_jobs(
+                    status=status_filter_val, include_archived=include_archived
+                )
                 jobs = result.get("jobs", [])
 
                 rows = []
@@ -1387,6 +1398,30 @@ class TeacherReviewWorkflow(BaseWorkflow):
             outputs=[state, progress_display, status_msg, finalize_status, report_files],
             action_status=action_status,
             action_text="Finalizing job and generating reports (this may take a few minutes)...",
+        )
+
+        # =================================================================
+        # PANEL 3: Archive Job
+        # =================================================================
+        async def handle_archive_job(state_dict):
+            state = WorkflowState.from_dict(state_dict)
+            if not state.job_id:
+                return "❌ No job loaded"
+            try:
+                result = await regrade_client.archive_job(state.job_id)
+                if result.get("status") == "success":
+                    return f"✅ Job `{state.job_id}` archived. It will no longer appear in the default job list."
+                return f"❌ {result.get('message', 'Archive failed')}"
+            except RegradeMCPClientError as e:
+                return f"❌ Archive failed: {e}"
+
+        self._wrap_button_click(
+            archive_job_btn,
+            handle_archive_job,
+            inputs=[state],
+            outputs=[archive_job_status],
+            action_status=action_status,
+            action_text="Archiving job...",
         )
 
         # =================================================================

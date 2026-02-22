@@ -99,13 +99,24 @@ class ScrubMCPClient:
             kwargs["batch_name"] = batch_name
         return await self.call_tool("create_batch", **kwargs)
 
-    async def list_batches(self) -> dict:
-        """List all scrub batches.
+    async def list_batches(self, include_archived: bool = False) -> dict:
+        """List scrub batches.
+
+        Args:
+            include_archived: Include archived batches (default: False)
 
         Returns:
             Result with batches list
         """
-        return await self.call_tool("list_batches")
+        return await self.call_tool("list_batches", include_archived=include_archived)
+
+    async def archive_batch(self, batch_id: str) -> dict:
+        """Archive a scrub batch (soft delete).
+
+        Returns:
+            Result with status
+        """
+        return await self.call_tool("archive_batch", batch_id=batch_id)
 
     async def get_batch_documents(self, batch_id: str) -> dict:
         """Get documents in a batch.

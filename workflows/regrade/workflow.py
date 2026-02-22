@@ -20,6 +20,9 @@ class EssayRegradeWorkflow(BaseWorkflow):
     description = "Import scrubbed essays, set up rubrics, and grade with AI"
     icon = "📊"
 
+    def display_name(self) -> str:
+        return f"{self.icon} Essay Pregrade"
+
     def get_steps(self) -> list[WorkflowStep]:
         """Define the 5 steps of essay regrading."""
         return [
@@ -32,7 +35,7 @@ class EssayRegradeWorkflow(BaseWorkflow):
 
     def build_ui(self) -> gr.Blocks:
         """Build the Gradio multi-step UI as a standalone app."""
-        with gr.Blocks(title="Essay Regrade") as app:
+        with gr.Blocks(title="Essay Pregrade") as app:
             self.build_ui_content()
         return app
 
@@ -60,7 +63,7 @@ class EssayRegradeWorkflow(BaseWorkflow):
         state = gr.State(self.create_initial_state().to_dict())
 
         # Header
-        gr.Markdown("# 📊 Essay Regrade Workflow")
+        gr.Markdown("# 📊 Essay Pregrade Workflow")
         status_msg = gr.Markdown("", elem_id="regrade_status_msg")
         action_status = gr.Markdown("", elem_id="regrade_action_status")
 
@@ -83,7 +86,14 @@ class EssayRegradeWorkflow(BaseWorkflow):
                     gr.Markdown("## Step 1: Select Scrub Batch")
                     gr.Markdown("Choose a completed scrub batch to import essays from.")
 
-                    load_batches_btn = gr.Button("Load Available Batches", variant="secondary")
+                    with gr.Row():
+                        batch_status_filter = gr.Dropdown(
+                            choices=["Active", "All (including archived)"],
+                            value="Active",
+                            label="Show Batches",
+                            scale=2,
+                        )
+                        load_batches_btn = gr.Button("Load Available Batches", variant="secondary", scale=1)
 
                     batches_table = gr.Dataframe(
                         headers=["Batch ID", "Name", "Created", "Status"],
@@ -102,7 +112,9 @@ class EssayRegradeWorkflow(BaseWorkflow):
                         interactive=False,
                     )
 
-                    select_batch_btn = gr.Button("Select Batch & Continue →", variant="primary")
+                    with gr.Row():
+                        select_batch_btn = gr.Button("Select Batch & Continue →", variant="primary", scale=3)
+                        archive_batch_btn = gr.Button("Archive Batch", variant="secondary", scale=1)
 
                 # =========================================================
                 # STEP 1: Setup Job
@@ -238,31 +250,56 @@ class EssayRegradeWorkflow(BaseWorkflow):
         panel_outputs = [step0_panel, step1_panel, step2_panel, step3_panel, step4_panel, complete_panel]
 
         # --- Step 0: Load batches ---
-        async def handle_load_batches(state_dict):
+        async def handle_load_batches(state_dict, filter_val):
             try:
-                result = await scrub_client.list_batches()
+                include_archived = (filter_val == "All (including archived)")
+                result = await scrub_client.list_batches(include_archived=include_archived)
                 batches = result.get("batches", [])
 
                 rows = []
                 for b in batches:
+                    archived = b.get("archived", 0)
+                    status = b.get("status", "")
+                    display_status = f"{status} [archived]" if archived else status
                     rows.append([
                         b.get("id", b.get("batch_id", "")),
                         b.get("name", ""),
                         b.get("created_at", ""),
-                        b.get("status", ""),
+                        display_status,
                     ])
 
                 return rows
-            except ScrubMCPClientError as e:
+            except ScrubMCPClientError:
                 return []
 
         self._wrap_button_click(
             load_batches_btn,
             handle_load_batches,
-            inputs=[state],
+            inputs=[state, batch_status_filter],
             outputs=[batches_table],
             action_status=action_status,
             action_text="Loading batches...",
+        )
+
+        # --- Step 0: Archive batch ---
+        async def handle_archive_batch(state_dict, batch_id_val):
+            if not batch_id_val or not batch_id_val.strip():
+                return "❌ Enter a Batch ID above before archiving"
+            try:
+                result = await scrub_client.archive_batch(batch_id_val.strip())
+                if result.get("status") == "success":
+                    return f"✅ Batch `{batch_id_val.strip()}` archived"
+                return f"❌ {result.get('message', 'Archive failed')}"
+            except ScrubMCPClientError as e:
+                return f"❌ Archive failed: {e}"
+
+        self._wrap_button_click(
+            archive_batch_btn,
+            handle_archive_batch,
+            inputs=[state, selected_batch_id],
+            outputs=[status_msg],
+            action_status=action_status,
+            action_text="Archiving batch...",
         )
 
         # --- Step 0: Select batch and preview ---

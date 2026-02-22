@@ -50,7 +50,7 @@ def create_app() -> gr.Blocks:
                     with gr.Group():
                         with gr.Row():
                             with gr.Column(scale=4):
-                                gr.Markdown(f"### {icon} {name.replace('_', ' ').title()}")
+                                gr.Markdown(f"### {workflow.display_name()}")
                                 gr.Markdown(description)
                                 step_summary = ", ".join([f"{s.icon} {s.label}" for s in steps[:4]])
                                 if len(steps) > 4:
