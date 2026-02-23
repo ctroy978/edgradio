@@ -134,18 +134,23 @@ class TeacherReviewWorkflow(BaseWorkflow):
                             essay_html = gr.HTML(label="Essay Text")
 
                             gr.Markdown("### Add Annotation")
+                            gr.Markdown(
+                                "_Tip: Select text in the essay above — a popup will appear to fill the fields below._",
+                            )
                             with gr.Row():
                                 annot_quote = gr.Textbox(
                                     label="Quote from essay",
-                                    placeholder="Copy-paste a passage from the essay...",
+                                    placeholder="Select text in the essay above — a popup will fill this...",
                                     scale=2,
+                                    elem_id="annot_quote_box",
                                 )
                                 annot_note = gr.Textbox(
                                     label="Your note",
                                     placeholder="Your comment on this passage...",
                                     scale=2,
+                                    elem_id="annot_note_box",
                                 )
-                                add_annot_btn = gr.Button("Add", variant="secondary", scale=1, min_width=80)
+                                add_annot_btn = gr.Button("Add", variant="secondary", scale=1, min_width=80, elem_id="add_annot_btn")
 
                             annotations_table = gr.Dataframe(
                                 headers=["#", "Selected Text", "Comment"],
@@ -180,6 +185,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
                             with gr.Row():
                                 save_essay_btn = gr.Button("Save", variant="primary")
+                                save_status_inline = gr.Markdown("")
 
                             with gr.Row():
                                 prev_essay_btn = gr.Button("← Previous")
@@ -501,7 +507,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     )
 
             result_html = (
-                '<div style="font-family: Georgia, serif; font-size: 14px; color: #000; '
+                '<div id="essay-text-container" style="font-family: Georgia, serif; font-size: 14px; color: #000; '
                 'line-height: 1.8; max-height: 600px; overflow-y: auto; padding: 16px; '
                 'border: 1px solid #ddd; border-radius: 8px; background: #fafafa;">'
                 + "".join(html_parts)
@@ -960,7 +966,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
         async def handle_save(state_dict, scores_df, overall, teacher_notes):
             state = WorkflowState.from_dict(state_dict)
             msg = await _save_current_review(state, scores_df, overall, teacher_notes)
-            return state.to_dict(), msg
+            return state.to_dict(), msg, msg
 
         save_inputs = [state, eval_scores_table, eval_overall_score, eval_teacher_notes]
 
@@ -968,7 +974,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
             save_essay_btn,
             handle_save,
             inputs=save_inputs,
-            outputs=[state, status_msg],
+            outputs=[state, status_msg, save_status_inline],
             action_status=action_status,
             action_text="Saving review...",
         )
