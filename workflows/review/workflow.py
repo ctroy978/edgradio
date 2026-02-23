@@ -1,7 +1,9 @@
 """Teacher Review Workflow - Review AI-graded essays, annotate, and generate reports."""
 
 import json
+import os
 import tempfile
+import zipfile
 
 import gradio as gr
 
@@ -219,8 +221,8 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
                     gr.Markdown("### Download Reports")
                     report_files = gr.File(
-                        label="Student Reports",
-                        file_count="multiple",
+                        label="Student Reports (ZIP)",
+                        file_count="single",
                         interactive=False,
                     )
 
@@ -1394,6 +1396,27 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 if errors:
                     finalize_msg += f"\n\n⚠️ {len(errors)} report(s) failed to generate"
 
+                # Bundle all reports into a single ZIP
+                zip_path = None
+                if report_paths:
+                    job_label = state.job_id.replace(" ", "_") if state.job_id else "reports"
+                    zip_tmp = tempfile.NamedTemporaryFile(
+                        suffix=".zip",
+                        prefix=f"reports_{job_label}_",
+                        delete=False,
+                    )
+                    zip_tmp.close()
+                    with zipfile.ZipFile(zip_tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for path in report_paths:
+                            zf.write(path, arcname=os.path.basename(path))
+                    # Clean up individual temp files
+                    for path in report_paths:
+                        try:
+                            os.unlink(path)
+                        except OSError:
+                            pass
+                    zip_path = zip_tmp.name
+
                 state.mark_step_complete(3)
 
                 return (
@@ -1401,7 +1424,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     self._render_progress(state),
                     finalize_msg,
                     finalize_msg,
-                    report_paths if report_paths else None,
+                    zip_path,
                 )
 
             except RegradeMCPClientError as e:
