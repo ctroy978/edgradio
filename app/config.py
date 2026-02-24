@@ -48,6 +48,14 @@ class Settings(BaseSettings):
         Path.home() / "Work" / "edmcp" / "edmcp-regrade" / "server.py"
     )
 
+    # Email MCP Server settings
+    email_mcp_server_path: str = str(
+        Path.home() / "Work" / "edmcp" / "edmcp-email" / "server.py"
+    )
+
+    # Central student roster directory (contains school_names.csv)
+    roster_dir: str = str(Path.home() / "Work" / "edmcp" / "data" / "names")
+
     # Optional: Brevo email settings (usually handled by MCP server)
     brevo_api_key: str | None = None
 
