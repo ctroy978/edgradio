@@ -8,7 +8,7 @@ import zipfile
 import gradio as gr
 
 from clients.regrade_mcp_client import RegradeMCPClient, RegradeMCPClientError
-from clients.scrub_mcp_client import ScrubMCPClient
+from clients.scrub_mcp_client import ScrubMCPClient, ScrubMCPClientError
 from workflows.base import BaseWorkflow, WorkflowState, WorkflowStep
 from workflows.registry import WorkflowRegistry
 
@@ -334,6 +334,13 @@ class TeacherReviewWorkflow(BaseWorkflow):
                         state.data["identity_map"] = identity_map
                 except RegradeMCPClientError:
                     state.data["identity_map"] = {}
+
+                # Load batch_id for full-chain archiving
+                try:
+                    batch_meta = await regrade_client.get_job_metadata(job_id_val, key="batch_id")
+                    state.data["batch_id"] = batch_meta.get("value", "")
+                except RegradeMCPClientError:
+                    state.data["batch_id"] = ""
 
                 identity_map = _get_identity_map(state)
 
@@ -1454,9 +1461,25 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 return "❌ No job loaded"
             try:
                 result = await regrade_client.archive_job(state.job_id)
-                if result.get("status") == "success":
-                    return f"✅ Job `{state.job_id}` archived. It will no longer appear in the default job list."
-                return f"❌ {result.get('message', 'Archive failed')}"
+                if result.get("status") != "success":
+                    return f"❌ {result.get('message', 'Archive failed')}"
+
+                msg = f"✅ Job `{state.job_id}` archived."
+
+                # Also archive the scrub batch if we have the link
+                batch_id = state.data.get("batch_id", "")
+                if batch_id:
+                    try:
+                        scrub_result = await scrub_client.archive_batch(batch_id)
+                        if scrub_result.get("status") == "success":
+                            msg += f" Scrub batch `{batch_id}` archived."
+                        else:
+                            msg += f" (Scrub batch already archived or not found.)"
+                    except ScrubMCPClientError:
+                        msg += " (Scrub batch could not be archived — archive it manually.)"
+
+                msg += " Neither will appear in the default lists."
+                return msg
             except RegradeMCPClientError as e:
                 return f"❌ Archive failed: {e}"
 

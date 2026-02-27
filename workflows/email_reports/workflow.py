@@ -5,6 +5,7 @@ import gradio as gr
 from app.config import settings
 from clients.email_mcp_client import EmailMCPClient, EmailMCPClientError
 from clients.regrade_mcp_client import RegradeMCPClient, RegradeMCPClientError
+from clients.scrub_mcp_client import ScrubMCPClient, ScrubMCPClientError
 from workflows.base import BaseWorkflow, WorkflowState, WorkflowStep
 from workflows.registry import WorkflowRegistry
 
@@ -47,6 +48,7 @@ class EmailReportsWorkflow(BaseWorkflow):
     def build_ui_content(self) -> None:  # noqa: C901
         regrade_client = RegradeMCPClient()
         email_client = EmailMCPClient()
+        scrub_client = ScrubMCPClient()
 
         init_state = self.create_initial_state()
         state = gr.State(init_state.to_dict())
@@ -68,6 +70,12 @@ class EmailReportsWorkflow(BaseWorkflow):
                     label="Select Job",
                     interactive=True,
                     scale=4,
+                )
+                include_archived_chk = gr.Checkbox(
+                    label="Show archived jobs",
+                    value=False,
+                    scale=0,
+                    min_width=160,
                 )
                 refresh_btn = gr.Button("↻ Refresh", size="sm", scale=0, min_width=100)
 
@@ -169,7 +177,7 @@ class EmailReportsWorkflow(BaseWorkflow):
         # =====================================================================
         # Job list fetching — extend here to add new emailable job sources
         # =====================================================================
-        async def _get_job_choices() -> list[tuple[str, str]]:
+        async def _get_job_choices(include_archived: bool = False) -> list[tuple[str, str]]:
             """Return (display_label, job_id) pairs for the job dropdown.
 
             Each source section is independent; failures are silently skipped
@@ -181,11 +189,13 @@ class EmailReportsWorkflow(BaseWorkflow):
 
             # --- Essay Regrade (edmcp-regrade) ---
             try:
-                result = await regrade_client.list_jobs(include_archived=False)
+                result = await regrade_client.list_jobs(include_archived=include_archived)
                 for j in result.get("jobs", []):
                     label = f"Essay Regrade — {j.get('name', j['id'])}"
                     if j.get("class_name"):
                         label += f" [{j['class_name']}]"
+                    if j.get("archived"):
+                        label += " [archived]"
                     choices.append((label, j["id"]))
             except RegradeMCPClientError:
                 pass
@@ -213,21 +223,25 @@ class EmailReportsWorkflow(BaseWorkflow):
         # =====================================================================
         # Handle: Refresh job list (and initial load via _load_events)
         # =====================================================================
-        async def handle_refresh_jobs():
-            choices = await _get_job_choices()
+        async def handle_refresh_jobs(include_archived):
+            choices = await _get_job_choices(include_archived=include_archived)
             return gr.update(choices=choices, value=None)
 
         self._wrap_button_click(
             refresh_btn,
             handle_refresh_jobs,
-            inputs=[],
+            inputs=[include_archived_chk],
             outputs=[job_dropdown],
             action_status=action_status,
             action_text="Refreshing job list...",
         )
 
-        # Wire initial population on app load
-        self._load_events = [(handle_refresh_jobs, [job_dropdown])]
+        # Wire initial population on app load (no-arg wrapper: default to non-archived)
+        async def _initial_load_jobs():
+            choices = await _get_job_choices(include_archived=False)
+            return gr.update(choices=choices, value=None)
+
+        self._load_events = [(_initial_load_jobs, [job_dropdown])]
 
         # =====================================================================
         # Handle: Load Job (fires on dropdown selection change)
@@ -264,6 +278,13 @@ class EmailReportsWorkflow(BaseWorkflow):
                         wf_state.data["identity_map"] = identity_map
                 except RegradeMCPClientError:
                     wf_state.data["identity_map"] = {}
+
+                # Load batch_id for full-chain archiving
+                try:
+                    batch_meta = await regrade_client.get_job_metadata(job_id_val, key="batch_id")
+                    wf_state.data["batch_id"] = batch_meta.get("value", "")
+                except RegradeMCPClientError:
+                    wf_state.data["batch_id"] = ""
 
                 # Load essays
                 essays_result = await regrade_client.get_job_essays(job_id_val)
@@ -708,10 +729,32 @@ class EmailReportsWorkflow(BaseWorkflow):
         async def handle_archive_job(state_dict):
             wf_state = WorkflowState.from_dict(state_dict)
             try:
-                await regrade_client.archive_job(wf_state.job_id)
+                job_result = await regrade_client.archive_job(wf_state.job_id)
+                if job_result.get("status") != "success":
+                    already = "already archived" in job_result.get("message", "")
+                    if not already:
+                        return (
+                            gr.update(visible=True),
+                            gr.update(value=f"❌ {job_result.get('message', 'Archive failed')}", visible=True),
+                        )
+                msg = "✅ Job archived."
+
+                # Also archive the scrub batch if we have the link
+                batch_id = wf_state.data.get("batch_id", "")
+                if batch_id:
+                    try:
+                        scrub_result = await scrub_client.archive_batch(batch_id)
+                        if scrub_result.get("status") == "success":
+                            msg += f" Scrub batch `{batch_id}` archived."
+                        else:
+                            msg += f" (Scrub batch already archived or not found.)"
+                    except ScrubMCPClientError:
+                        msg += " (Scrub batch could not be archived — archive it manually.)"
+
+                msg += " Neither will appear in the default lists."
                 return (
                     gr.update(visible=False),
-                    gr.update(value="✅ Job archived. It will no longer appear in the job list.", visible=True),
+                    gr.update(value=msg, visible=True),
                 )
             except RegradeMCPClientError as e:
                 return (

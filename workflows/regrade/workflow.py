@@ -114,7 +114,6 @@ class EssayRegradeWorkflow(BaseWorkflow):
 
                     with gr.Row():
                         select_batch_btn = gr.Button("Select Batch & Continue →", variant="primary", scale=3)
-                        archive_batch_btn = gr.Button("Archive Batch", variant="secondary", scale=1)
 
                 # =========================================================
                 # STEP 1: Setup Job
@@ -273,27 +272,6 @@ class EssayRegradeWorkflow(BaseWorkflow):
             outputs=[batches_table],
             action_status=action_status,
             action_text="Loading batches...",
-        )
-
-        # --- Step 0: Archive batch ---
-        async def handle_archive_batch(state_dict, batch_id_val):
-            if not batch_id_val or not batch_id_val.strip():
-                return "❌ Enter a Batch ID above before archiving"
-            try:
-                result = await scrub_client.archive_batch(batch_id_val.strip())
-                if result.get("status") == "success":
-                    return f"✅ Batch `{batch_id_val.strip()}` archived"
-                return f"❌ {result.get('message', 'Archive failed')}"
-            except ScrubMCPClientError as e:
-                return f"❌ Archive failed: {e}"
-
-        self._wrap_button_click(
-            archive_batch_btn,
-            handle_archive_batch,
-            inputs=[state, selected_batch_id],
-            outputs=[status_msg],
-            action_status=action_status,
-            action_text="Archiving batch...",
         )
 
         # --- Step 0: Select batch and preview ---
@@ -631,6 +609,14 @@ class EssayRegradeWorkflow(BaseWorkflow):
                     )
                 except RegradeMCPClientError:
                     pass  # Non-fatal: review workflow can still work with anon IDs
+
+                # Persist batch_id so downstream workflows can archive the full chain
+                batch_id = state.data.get("batch_id", "")
+                if batch_id:
+                    try:
+                        await regrade_client.set_job_metadata(state.job_id, "batch_id", batch_id)
+                    except RegradeMCPClientError:
+                        pass  # Non-fatal
 
                 # Grade all essays
                 grade_result = await regrade_client.grade_job(state.job_id)
