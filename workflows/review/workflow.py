@@ -1,9 +1,6 @@
 """Teacher Review Workflow - Review AI-graded essays, annotate, and generate reports."""
 
 import json
-import os
-import tempfile
-import zipfile
 
 import gradio as gr
 
@@ -220,11 +217,17 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     finalize_status = gr.Markdown("")
 
                     gr.Markdown("### Download Reports")
-                    report_files = gr.File(
-                        label="Student Reports (ZIP)",
-                        file_count="single",
-                        interactive=False,
-                    )
+                    with gr.Row():
+                        report_files = gr.File(
+                            label="Student Reports (ZIP)",
+                            file_count="single",
+                            interactive=False,
+                        )
+                        gradebook_csv_file = gr.File(
+                            label="Gradebook (CSV)",
+                            file_count="single",
+                            interactive=False,
+                        )
 
                     gr.Markdown("---")
                     gr.Markdown(
@@ -1359,70 +1362,29 @@ class TeacherReviewWorkflow(BaseWorkflow):
             try:
                 # Finalize without AI refinement — the teacher's generated preview
                 # is the authoritative content; we never re-run AI over it.
-                result = await regrade_client.finalize_job(
+                await regrade_client.finalize_job(
                     job_id=state.job_id,
                     refine_comments=False,
                 )
 
-                finalize_msg = "✅ Job finalized"
+                # Package all reports + gradebook CSV into a ZIP on the server
+                package_result = await regrade_client.package_evaluation_reports(
+                    job_id=state.job_id
+                )
 
-                # Generate reports
-                essay_ids = state.data.get("essay_ids", [])
-                identity_map = _get_identity_map(state)
-                report_paths = []
-                errors = []
-
-                for eid in essay_ids:
-                    try:
-                        report_result = await regrade_client.generate_student_report(
-                            job_id=state.job_id, essay_id=int(eid)
-                        )
-                        html_content = report_result.get("html", report_result.get("report", ""))
-                        if html_content:
-                            # Find student name for filename
-                            essays = state.data.get("essays", [])
-                            sid = ""
-                            for e in essays:
-                                if e.get("id") == eid:
-                                    sid = e.get("student_identifier", "")
-                                    break
-                            name = _student_name(identity_map, sid).replace(" ", "_")
-
-                            tmp = tempfile.NamedTemporaryFile(
-                                suffix=".html",
-                                prefix=f"report_{name}_",
-                                delete=False,
-                                mode="w",
-                            )
-                            tmp.write(html_content)
-                            tmp.close()
-                            report_paths.append(tmp.name)
-                    except RegradeMCPClientError as e:
-                        errors.append(f"Essay {eid}: {e}")
-
-                if errors:
-                    finalize_msg += f"\n\n⚠️ {len(errors)} report(s) failed to generate"
-
-                # Bundle all reports into a single ZIP
-                zip_path = None
-                if report_paths:
-                    job_label = state.job_id.replace(" ", "_") if state.job_id else "reports"
-                    zip_tmp = tempfile.NamedTemporaryFile(
-                        suffix=".zip",
-                        prefix=f"reports_{job_label}_",
-                        delete=False,
+                if package_result.get("status") != "success":
+                    raise RegradeMCPClientError(
+                        package_result.get("message", "Packaging failed")
                     )
-                    zip_tmp.close()
-                    with zipfile.ZipFile(zip_tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
-                        for path in report_paths:
-                            zf.write(path, arcname=os.path.basename(path))
-                    # Clean up individual temp files
-                    for path in report_paths:
-                        try:
-                            os.unlink(path)
-                        except OSError:
-                            pass
-                    zip_path = zip_tmp.name
+
+                zip_path = package_result.get("zip_path")
+                csv_path = package_result.get("csv_path")
+                report_count = package_result.get("report_count", 0)
+                skipped = package_result.get("skipped", [])
+
+                finalize_msg = f"✅ Job finalized — {report_count} report(s) packaged"
+                if skipped:
+                    finalize_msg += f"\n\nℹ️ {len(skipped)} essay(s) skipped (not yet graded)"
 
                 state.mark_step_complete(3)
 
@@ -1432,6 +1394,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     finalize_msg,
                     finalize_msg,
                     zip_path,
+                    csv_path,
                 )
 
             except RegradeMCPClientError as e:
@@ -1441,13 +1404,14 @@ class TeacherReviewWorkflow(BaseWorkflow):
                     f"❌ Finalization failed: {e}",
                     f"❌ Error: {e}",
                     None,
+                    None,
                 )
 
         self._wrap_button_click(
             finalize_btn,
             handle_finalize,
             inputs=[state],
-            outputs=[state, progress_display, status_msg, finalize_status, report_files],
+            outputs=[state, progress_display, status_msg, finalize_status, report_files, gradebook_csv_file],
             action_status=action_status,
             action_text="Finalizing job and generating reports (this may take a few minutes)...",
         )

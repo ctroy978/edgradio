@@ -281,3 +281,19 @@ class RegradeMCPClient(BaseMCPClient):
         if model:
             kwargs["model"] = model
         return await self.call_tool("generate_merged_report", **kwargs)
+
+    async def package_evaluation_reports(self, job_id: str) -> dict:
+        """Bundle all student HTML reports + gradebook CSV into a ZIP archive.
+
+        Returns:
+            Result with zip_path, csv_path, and report_count
+        """
+        return await self.call_tool("package_evaluation_reports", job_id=job_id)
+
+    async def generate_gradebook_csv(self, job_id: str) -> dict:
+        """Generate a standalone gradebook CSV for a job.
+
+        Returns:
+            Result with csv_path
+        """
+        return await self.call_tool("generate_gradebook_csv", job_id=job_id)

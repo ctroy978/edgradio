@@ -103,9 +103,9 @@ class ReadingHandoutWorkflow(BaseWorkflow):
 
             content_input = gr.Textbox(
                 label="Content",
-                placeholder="Enter your reading content here...\n\nYou can use LaTeX formatting:\n- \\textbf{bold text}\n- \\textit{italic text}\n- \\section{Section Title}",
+                placeholder="Enter your reading content here...",
                 lines=12,
-                info="Main content of the handout. LaTeX formatting supported.",
+                info="Main content of the handout.",
             )
 
             footnotes_input = gr.Textbox(
