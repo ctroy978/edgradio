@@ -282,6 +282,31 @@ class RegradeMCPClient(BaseMCPClient):
             kwargs["model"] = model
         return await self.call_tool("generate_merged_report", **kwargs)
 
+    async def refine_teacher_notes(
+        self,
+        job_id: str,
+        essay_id: int,
+        teacher_notes: str = "",
+        model: str = "",
+    ) -> dict:
+        """Use AI to clean up and professionalize the teacher's free-form notes.
+
+        Args:
+            job_id: The regrade job ID
+            essay_id: The essay ID
+            teacher_notes: The teacher's raw notes to refine
+            model: Optional AI model override
+
+        Returns:
+            Result with {"status": "success", "refined_notes": "...", "essay_id": ...}
+        """
+        kwargs: dict[str, Any] = {"job_id": job_id, "essay_id": essay_id}
+        if teacher_notes:
+            kwargs["teacher_notes"] = teacher_notes
+        if model:
+            kwargs["model"] = model
+        return await self.call_tool("refine_teacher_notes", **kwargs)
+
     async def package_evaluation_reports(self, job_id: str) -> dict:
         """Bundle all student HTML reports + gradebook CSV into a ZIP archive.
 

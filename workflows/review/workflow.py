@@ -628,18 +628,18 @@ class TeacherReviewWorkflow(BaseWorkflow):
             scores_df,
             overall: str,
             teacher_notes: str,
-            criteria_justifications=None,
+            refined_teacher_notes=None,
             report_generated: bool = False,
         ) -> tuple:
             """Combine edited form data back for saving via MCP.
 
             Returns (teacher_grade, teacher_comments).
-            New JSON format:
+            JSON format:
               {"teacher_notes": "...", "criteria_overrides": [...],
-               "overall_score": "...", "criteria_justifications": [...],
+               "overall_score": "...", "refined_teacher_notes": "...",
                "report_generated": true/false}
 
-            criteria_justifications and report_generated are passed through from
+            refined_teacher_notes and report_generated are passed through from
             state so that auto-saves don't wipe out a previously generated preview.
             """
             criteria_overrides = []
@@ -653,7 +653,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
                 "teacher_notes": teacher_notes or "",
                 "criteria_overrides": criteria_overrides,
                 "overall_score": overall or "",
-                "criteria_justifications": criteria_justifications,
+                "refined_teacher_notes": refined_teacher_notes,
                 "report_generated": report_generated,
             })
 
@@ -736,7 +736,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
             teacher_notes = ""
             report_generated = False
 
-            criteria_justifications = None
+            refined_notes = None
             if teacher_comments_raw:
                 try:
                     parsed = json.loads(teacher_comments_raw)
@@ -748,8 +748,8 @@ class TeacherReviewWorkflow(BaseWorkflow):
                             if overrides:
                                 scores_rows = [[o["name"], o["score"]] for o in overrides]
                             overall_score = parsed.get("overall_score", ai_overall) or ai_overall
-                            criteria_justifications = parsed.get("criteria_justifications")
-                            report_generated = bool(parsed.get("report_generated") and criteria_justifications)
+                            refined_notes = parsed.get("refined_teacher_notes")
+                            report_generated = bool(parsed.get("report_generated"))
                         elif "edited_evaluation" in parsed:
                             # Tier 2: old format
                             saved_edited = parsed["edited_evaluation"]
@@ -767,7 +767,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
 
             # Store preview state in workflow state so saves preserve it
             state.data["current_report_generated"] = report_generated
-            state.data["current_criteria_justifications"] = criteria_justifications if report_generated else None
+            state.data["current_refined_notes"] = refined_notes if report_generated else None
 
             # Header
             essay_ids = state.data.get("essay_ids", [])
@@ -953,12 +953,12 @@ class TeacherReviewWorkflow(BaseWorkflow):
             annotations_json = json.dumps(annotations) if annotations else ""
 
             # Preserve any previously generated preview data so saves don't wipe it
-            criteria_justifications = state.data.get("current_criteria_justifications")
+            refined_teacher_notes = state.data.get("current_refined_notes")
             report_generated = state.data.get("current_report_generated", False)
 
             teacher_grade, teacher_comments = _serialize_edited_eval(
                 scores_df, overall, teacher_notes,
-                criteria_justifications=criteria_justifications,
+                refined_teacher_notes=refined_teacher_notes,
                 report_generated=report_generated,
             )
 
@@ -1092,8 +1092,8 @@ class TeacherReviewWorkflow(BaseWorkflow):
         async def handle_preview_report(state_dict, scores_df, overall, teacher_notes):
             """Generate a preview of the student report.
 
-            Always synthesizes teacher input via AI first so the preview reflects
-            the teacher's overrides and notes as seamless prose (not a separate box).
+            Refines the teacher's notes via AI (without blending into rubric cards),
+            then renders the report with AI rubric cards + polished teacher comments below.
             """
             state = WorkflowState.from_dict(state_dict)
             essay_id = state.data.get("current_essay_id")
@@ -1106,40 +1106,29 @@ class TeacherReviewWorkflow(BaseWorkflow):
             if save_msg.startswith("❌"):
                 return state.to_dict(), save_msg, ""
 
-            # Extract criteria_overrides for the synthesis call
-            criteria_overrides = []
-            if scores_df is not None:
-                rows = scores_df.values.tolist() if hasattr(scores_df, 'values') else scores_df
-                for row in rows:
-                    if len(row) >= 2:
-                        criteria_overrides.append({"name": str(row[0]), "score": str(row[1])})
-            criteria_overrides_json = json.dumps(criteria_overrides) if criteria_overrides else ""
-
             try:
-                # Always (re-)synthesize so the preview reflects current teacher input
-                merged_result = await regrade_client.generate_merged_report(
+                # Refine teacher notes (AI cleans them up, doesn't blend into rubric)
+                refine_result = await regrade_client.refine_teacher_notes(
                     job_id=state.job_id,
                     essay_id=int(essay_id),
                     teacher_notes=teacher_notes or "",
-                    criteria_overrides=criteria_overrides_json,
                 )
 
-                if merged_result.get("status") != "success":
-                    err = merged_result.get("message", "Unknown error")
-                    return state.to_dict(), f"❌ Report synthesis failed: {err}", ""
+                if refine_result.get("status") != "success":
+                    err = refine_result.get("message", "Unknown error")
+                    return state.to_dict(), f"❌ Note refinement failed: {err}", ""
 
-                criteria_justifications = merged_result.get("criteria_justifications", [])
+                refined_notes = refine_result.get("refined_notes", "")
 
-                # Update state with synthesis results, then do a full save via the
-                # standard path — symmetric with the pre-synthesis save above.
-                state.data["current_criteria_justifications"] = criteria_justifications
+                # Update state with refined notes, then save so the report uses them
+                state.data["current_refined_notes"] = refined_notes
                 state.data["current_report_generated"] = True
 
                 save_msg2 = await _save_current_review(state, scores_df, overall, teacher_notes)
                 if save_msg2.startswith("❌"):
                     return state.to_dict(), save_msg2, ""
 
-                # Now render the full student HTML report (rubric + prose + essay)
+                # Render the full student HTML report
                 report_result = await regrade_client.generate_student_report(
                     job_id=state.job_id, essay_id=int(essay_id)
                 )
@@ -1174,7 +1163,7 @@ class TeacherReviewWorkflow(BaseWorkflow):
         def _invalidate_preview(state_dict):
             state = WorkflowState.from_dict(state_dict)
             state.data["current_report_generated"] = False
-            state.data["current_criteria_justifications"] = None
+            state.data["current_refined_notes"] = None
             return state.to_dict()
 
         eval_scores_table.change(fn=_invalidate_preview, inputs=[state], outputs=[state])

@@ -202,6 +202,7 @@ def main():
         share=settings.gradio_share,
         theme=gr.themes.Soft(),
         js=ESSAY_ANNOTATION_JS,
+        allowed_paths=[settings.regrade_exports_dir],
     )
 
 

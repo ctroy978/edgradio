@@ -48,6 +48,11 @@ class Settings(BaseSettings):
         Path.home() / "Work" / "edmcp" / "edmcp-regrade" / "server.py"
     )
 
+    # Regrade exports directory (generated ZIPs and CSVs)
+    regrade_exports_dir: str = str(
+        Path.home() / "Work" / "edmcp" / "data" / "exports"
+    )
+
     # Email MCP Server settings
     email_mcp_server_path: str = str(
         Path.home() / "Work" / "edmcp" / "edmcp-email" / "server.py"
