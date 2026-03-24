@@ -84,6 +84,14 @@ class RegradeMCPClient(BaseMCPClient):
         """
         return await self.call_tool("archive_job", job_id=job_id)
 
+    async def unarchive_job(self, job_id: str) -> dict:
+        """Unarchive (restore) a job.
+
+        Returns:
+            Result with status
+        """
+        return await self.call_tool("unarchive_job", job_id=job_id)
+
     # =========================================================================
     # Essay Management
     # =========================================================================

@@ -262,3 +262,34 @@ class MCPClient(BaseMCPClient):
             Result with words list
         """
         return await self.call_tool("get_custom_scrub_words", job_id=job_id)
+
+    # =========================================================================
+    # Archive Management
+    # =========================================================================
+
+    async def list_jobs(self, include_archived: bool = False) -> dict:
+        """List essay grading jobs.
+
+        Returns:
+            Result with jobs list
+        """
+        kwargs = {}
+        if include_archived:
+            kwargs["include_archived"] = True
+        return await self.call_tool("list_essay_jobs", **kwargs)
+
+    async def archive_essay_job(self, job_id: str) -> dict:
+        """Archive an essay grading job (soft delete).
+
+        Returns:
+            Result with status
+        """
+        return await self.call_tool("archive_essay_job", job_id=job_id)
+
+    async def unarchive_essay_job(self, job_id: str) -> dict:
+        """Unarchive (restore) an essay grading job.
+
+        Returns:
+            Result with status
+        """
+        return await self.call_tool("unarchive_essay_job", job_id=job_id)

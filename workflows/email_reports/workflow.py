@@ -5,7 +5,6 @@ import gradio as gr
 from app.config import settings
 from clients.email_mcp_client import EmailMCPClient, EmailMCPClientError
 from clients.regrade_mcp_client import RegradeMCPClient, RegradeMCPClientError
-from clients.scrub_mcp_client import ScrubMCPClient, ScrubMCPClientError
 from workflows.base import BaseWorkflow, WorkflowState, WorkflowStep
 from workflows.registry import WorkflowRegistry
 
@@ -48,7 +47,6 @@ class EmailReportsWorkflow(BaseWorkflow):
     def build_ui_content(self) -> None:  # noqa: C901
         regrade_client = RegradeMCPClient()
         email_client = EmailMCPClient()
-        scrub_client = ScrubMCPClient()
 
         init_state = self.create_initial_state()
         state = gr.State(init_state.to_dict())
@@ -139,11 +137,7 @@ class EmailReportsWorkflow(BaseWorkflow):
                 resend_btn = gr.Button(
                     "Resend Failed Emails", variant="secondary", visible=False
                 )
-                archive_btn = gr.Button(
-                    "Archive Job", variant="secondary", visible=False
-                )
                 reset_btn = gr.Button("Email Another Job", variant="secondary")
-            archive_status = gr.Markdown("", visible=False)
 
         # =====================================================================
         # Shared helpers
@@ -628,7 +622,6 @@ class EmailReportsWorkflow(BaseWorkflow):
 
             rows = _build_send_results_table(result)
             show_resend = n_failed > 0
-            show_archive = not dry_run and n_sent > 0 and n_failed == 0
 
             wf_state.current_step = 2
             wf_state.mark_step_complete(1)
@@ -640,7 +633,6 @@ class EmailReportsWorkflow(BaseWorkflow):
                 gr.update(value=dry_run_notice_val, visible=bool(dry_run_notice_val)),
                 rows,
                 gr.update(visible=show_resend),
-                gr.update(visible=show_archive),
                 *update_panels(2).values(),
             )
 
@@ -655,7 +647,6 @@ class EmailReportsWorkflow(BaseWorkflow):
                 dry_run_notice,
                 results_table,
                 resend_btn,
-                archive_btn,
                 *panel_outputs,
             ],
             action_status=action_status,
@@ -721,54 +712,6 @@ class EmailReportsWorkflow(BaseWorkflow):
             ],
             action_status=action_status,
             action_text="Resending failed emails...",
-        )
-
-        # =====================================================================
-        # Handle: Archive Job
-        # =====================================================================
-        async def handle_archive_job(state_dict):
-            wf_state = WorkflowState.from_dict(state_dict)
-            try:
-                job_result = await regrade_client.archive_job(wf_state.job_id)
-                if job_result.get("status") != "success":
-                    already = "already archived" in job_result.get("message", "")
-                    if not already:
-                        return (
-                            gr.update(visible=True),
-                            gr.update(value=f"❌ {job_result.get('message', 'Archive failed')}", visible=True),
-                        )
-                msg = "✅ Job archived."
-
-                # Also archive the scrub batch if we have the link
-                batch_id = wf_state.data.get("batch_id", "")
-                if batch_id:
-                    try:
-                        scrub_result = await scrub_client.archive_batch(batch_id)
-                        if scrub_result.get("status") == "success":
-                            msg += f" Scrub batch `{batch_id}` archived."
-                        else:
-                            msg += f" (Scrub batch already archived or not found.)"
-                    except ScrubMCPClientError:
-                        msg += " (Scrub batch could not be archived — archive it manually.)"
-
-                msg += " Neither will appear in the default lists."
-                return (
-                    gr.update(visible=False),
-                    gr.update(value=msg, visible=True),
-                )
-            except RegradeMCPClientError as e:
-                return (
-                    gr.update(visible=True),
-                    gr.update(value=f"❌ Archive failed: {e}", visible=True),
-                )
-
-        self._wrap_button_click(
-            archive_btn,
-            handle_archive_job,
-            inputs=[state],
-            outputs=[archive_btn, archive_status],
-            action_status=action_status,
-            action_text="Archiving job...",
         )
 
         # =====================================================================

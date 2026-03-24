@@ -13,6 +13,7 @@ from workflows.document_scrub.workflow import DocumentScrubWorkflow  # noqa: F40
 from workflows.regrade.workflow import EssayRegradeWorkflow  # noqa: F401
 from workflows.review.workflow import TeacherReviewWorkflow  # noqa: F401
 from workflows.email_reports.workflow import EmailReportsWorkflow  # noqa: F401
+from workflows.archive_manager.workflow import ArchiveManagerWorkflow  # noqa: F401
 from workflows.registry import WorkflowRegistry
 
 

@@ -52,6 +52,14 @@ class ScrubMCPClient(BaseMCPClient):
         """
         return await self.call_tool("archive_batch", batch_id=batch_id)
 
+    async def unarchive_batch(self, batch_id: str) -> dict:
+        """Unarchive (restore) a scrub batch.
+
+        Returns:
+            Result with status
+        """
+        return await self.call_tool("unarchive_batch", batch_id=batch_id)
+
     async def get_batch_documents(self, batch_id: str) -> dict:
         """Get documents in a batch.
 

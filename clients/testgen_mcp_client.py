@@ -149,6 +149,14 @@ class TestgenMCPClient(BaseMCPClient):
         """
         return await self.call_tool("archive_test_job", job_id=job_id)
 
+    async def unarchive_test_job(self, job_id: str) -> dict:
+        """Unarchive (restore) a test job.
+
+        Returns:
+            Result with status
+        """
+        return await self.call_tool("unarchive_test_job", job_id=job_id)
+
     # =========================================================================
     # Materials Management
     # =========================================================================
