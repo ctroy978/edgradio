@@ -240,12 +240,3 @@ class ArchiveManagerWorkflow(BaseWorkflow):
                     outputs=[archived_status, archived_dropdown, archived_warnings],
                 )
 
-        # Load active list on workflow render
-        async def _initial_load():
-            choices, warnings_msg = await _fetch_choices(archived_only=False)
-            return gr.update(choices=choices, value=None), warnings_msg
-
-        self._load_events = self._load_events if hasattr(self, "_load_events") else []
-        self._load_events.append(
-            (_initial_load, [active_dropdown, active_warnings])
-        )

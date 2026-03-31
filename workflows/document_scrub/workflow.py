@@ -310,7 +310,7 @@ class DocumentScrubWorkflow(BaseWorkflow):
                 )
 
                 batch_id = result.get("batch_id", "")
-                docs_processed = result.get("documents_processed", 0)
+                docs_processed = result.get("students_detected", 0)
 
                 state.job_id = batch_id
                 state.data["documents_processed"] = docs_processed
@@ -470,9 +470,19 @@ class DocumentScrubWorkflow(BaseWorkflow):
                 )
 
             try:
-                await scrub_client.correct_name(
+                result = await scrub_client.correct_name(
                     state.job_id, int(doc_id), corrected_name_val
                 )
+                status = result.get("status", "")
+                if status == "not_in_roster":
+                    msg = result.get("message", "Name not found in roster.")
+                    matches = result.get("possible_matches", [])
+                    if matches:
+                        names_list = ", ".join(m["name"] for m in matches)
+                        msg += f" Possible matches: {names_list}"
+                    return f"⚠️ {msg}", gr.update()
+                if status == "error":
+                    return f"❌ {result.get('message', 'Correction failed.')}", gr.update()
                 return await load_names(state_dict)
             except ScrubMCPClientError as e:
                 return f"❌ Correction failed: {e}", gr.update()

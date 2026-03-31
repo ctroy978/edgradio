@@ -1,5 +1,6 @@
 """Base MCP Client — persistent subprocess session with reconnect-on-failure."""
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,7 @@ class BaseMCPClient:
         read, write = await self._stdio_cm.__aenter__()
         self._session_cm = ClientSession(read, write)
         session = await self._session_cm.__aenter__()
-        await session.initialize()
+        await asyncio.wait_for(session.initialize(), timeout=30.0)
         self._session = session
         return session
 
@@ -73,7 +74,10 @@ class BaseMCPClient:
         for attempt in range(2):
             try:
                 session = await self._ensure_session()
-                result = await session.call_tool(tool_name, arguments=kwargs)
+                result = await asyncio.wait_for(
+                    session.call_tool(tool_name, arguments=kwargs),
+                    timeout=30.0,
+                )
                 if result.content:
                     text = "\n".join(
                         item.text for item in result.content if hasattr(item, "text")
