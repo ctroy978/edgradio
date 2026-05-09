@@ -69,14 +69,14 @@ class BaseMCPClient:
             await self._start_session()
         return self._session
 
-    async def call_tool(self, tool_name: str, **kwargs) -> dict[str, Any]:
+    async def call_tool(self, tool_name: str, *, _timeout: float = 30.0, **kwargs) -> dict[str, Any]:
         """Call a tool on the persistent session. Reconnects once on failure."""
         for attempt in range(2):
             try:
                 session = await self._ensure_session()
                 result = await asyncio.wait_for(
                     session.call_tool(tool_name, arguments=kwargs),
-                    timeout=30.0,
+                    timeout=_timeout,
                 )
                 if result.content:
                     text = "\n".join(

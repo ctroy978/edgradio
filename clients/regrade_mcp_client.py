@@ -158,7 +158,7 @@ class RegradeMCPClient(BaseMCPClient):
         Returns:
             Result with grading results summary
         """
-        return await self.call_tool("grade_job", job_id=job_id)
+        return await self.call_tool("grade_job", _timeout=1800.0, job_id=job_id)
 
     async def get_job_statistics(self, job_id: str) -> dict:
         """Get grading statistics for a job.
